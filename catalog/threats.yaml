@@ -1,0 +1,142 @@
+# Threat Catalog (§7, Threats TH-01 to TH-20 mapped to OWASP LLM / Agentic / MITRE ATLAS)
+
+threats:
+  - id: TH-01
+    name: Direct Prompt Injection
+    category: Prompt Injection
+    description: Direct instruction override or jailbreak embedded in user input
+    owasp_llm: LLM01:2025
+    atlas: AML.T0051
+
+  - id: TH-02
+    name: Indirect Prompt Injection
+    category: Prompt Injection
+    description: Untrusted external data (web, retrieved doc, tool output) instructs the model
+    owasp_llm: LLM01:2025
+    atlas: AML.T0051.001
+
+  - id: TH-03
+    name: Inbound PII Exposure
+    category: Sensitive Data
+    description: PII provided in user input
+    owasp_llm: LLM02:2025
+    atlas: AML.T0035
+
+  - id: TH-04
+    name: Secrets & Credentials Leakage
+    category: Sensitive Data
+    description: API keys, tokens, private keys or passwords leaked in prompt, output or tool results
+    owasp_llm: LLM02:2025
+    atlas: AML.T0035
+
+  - id: TH-05
+    name: Outbound PII Leakage
+    category: Sensitive Data
+    description: PII leaked in model output or tool response
+    owasp_llm: LLM02:2025
+    atlas: AML.T0035
+
+  - id: TH-06
+    name: Disallowed Model Selection
+    category: Access Control
+    description: Calling models not permitted for the caller identity's role
+    owasp_llm: LLM06:2025
+    atlas: AML.T0025
+
+  - id: TH-07
+    name: Unauthorized Tool Invocation / Excessive Agency
+    category: Access Control
+    description: Invoking tools not granted to the role or violating tool arguments schema
+    owasp_llm: LLM06:2025
+    atlas: AML.T0053
+
+  - id: TH-08
+    name: Impersonation & Missing Authentication
+    category: Access Control
+    description: Missing/invalid API key or agent header mismatch
+    owasp_llm: LLM06:2025
+    atlas: AML.T0025
+
+  - id: TH-09
+    name: Delegation & Privilege Escalation
+    category: Access Control
+    description: Excessive delegation depth or unauthorized capability widening
+    owasp_llm: LLM06:2025
+    atlas: AML.T0053
+
+  - id: TH-10
+    name: Unauthorized Memory / RAG Access
+    category: Access Control
+    description: Accessing restricted memory or document namespaces
+    owasp_llm: LLM06:2025
+    atlas: AML.T0035
+
+  - id: TH-11
+    name: Token Overuse
+    category: Denial of Service / Resources
+    description: Exceeding allocated token quotas
+    owasp_llm: LLM04:2025
+    atlas: AML.T0029
+
+  - id: TH-12
+    name: Cost / Compute Overuse
+    category: Denial of Service / Resources
+    description: Exceeding compute seconds or dollar budget limits
+    owasp_llm: LLM04:2025
+    atlas: AML.T0029
+
+  - id: TH-13
+    name: Runaway Tool Loops
+    category: Denial of Service / Resources
+    description: Repeated identical tool calls or excessive calls in a session
+    owasp_llm: LLM06:2025
+    atlas: AML.T0053
+
+  - id: TH-14
+    name: Unsafe Deserialization
+    category: Supply Chain & Code Execution
+    description: Malicious pickle or model artifact containing dangerous opcodes
+    owasp_llm: LLM03:2025
+    atlas: AML.T0010
+
+  - id: TH-15
+    name: Malicious Code Execution
+    category: Code Execution
+    description: Shell command chaining, eval/exec, reverse shells in output or tool arguments
+    owasp_llm: LLM05:2025
+    atlas: AML.T0053
+
+  - id: TH-16
+    name: Supply Chain Compromise
+    category: Supply Chain & Code Execution
+    description: Malicious packages or model repos
+    owasp_llm: LLM03:2025
+    atlas: AML.T0010
+
+  - id: TH-17
+    name: Known Historical Attack Signature
+    category: Threat Intelligence
+    description: Input matching known attack patterns from security feed
+    owasp_llm: LLM01:2025
+    atlas: AML.T0051
+
+  - id: TH-18
+    name: Canary / System Prompt Leakage
+    category: Sensitive Data
+    description: System prompt canary token detected in output or tool call
+    owasp_llm: LLM02:2025
+    atlas: AML.T0035
+
+  - id: TH-19
+    name: Tainted Session Privileged Action
+    category: Prompt Injection
+    description: Tool call with elevated privileges requested after untrusted data entered session
+    owasp_llm: LLM01:2025
+    atlas: AML.T0051
+
+  - id: TH-20
+    name: Oversized Input / DoS
+    category: Denial of Service / Resources
+    description: Excessive message count, oversized message characters or payload bytes
+    owasp_llm: LLM04:2025
+    atlas: AML.T0029

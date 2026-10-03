@@ -294,3 +294,47 @@ async def test_healthz(gw):
         "policy_version": gw.app.state.runtime.policy.version,
         "feed_version": "2026-10-03.1",
     }
+
+
+async def test_disallowed_model_is_blocked_by_c_model_allow(gw):
+    # researcher only allows ollama-local; mock-commercial should be blocked at ingress
+    r = await gw.chat("hello", key="research", model="mock-commercial")
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["type"] == "aicl_blocked"
+    assert err["control_id"] == "C-MODEL-ALLOW"
+    assert err["threat_ids"] == ["TH-06"]
+    assert gw.calls == []
+    e = await gw.request_event(r)
+    assert e.final_action == Action.block and not e.upstream_called
+    assert e.decisions[0].control_id == "C-MODEL-ALLOW"
+
+
+async def test_oversized_message_is_blocked_by_c_size(tmp_path):
+    upstream, calls = make_fake_upstream()
+    audit = tmp_path / "audit.jsonl"
+    app = create_app(
+        REPO / "policies" / "default.yaml",
+        env=ENV,
+        base_dir=REPO,
+        audit_path=audit,
+        upstream_transport=httpx.ASGITransport(upstream),
+    )
+    # Update size_limits params to max_chars_per_message = 20
+    policy = app.state.runtime.policy
+    cfg = policy.level_config("C-SIZE", "balanced")
+    if cfg is not None:
+        cfg.max_chars_per_message = 20
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            h = {"Authorization": "Bearer k-support"}
+            payload = {"model": "mock-commercial", "messages": [{"role": "user", "content": "A" * 50}]}
+            r = await client.post("/v1/chat/completions", json=payload, headers=h)
+            assert r.status_code == 403
+            err = r.json()["error"]
+            assert err["type"] == "aicl_blocked"
+            assert err["control_id"] == "C-SIZE"
+            assert err["threat_ids"] == ["TH-20"]
+            assert calls == []
+

@@ -141,6 +141,8 @@ async def _run(rt: Runtime, rec: RequestRecord, raw_body: bytes, headers: Mappin
     req, data = _parse(raw_body)
     rec.model = req.model
     segments = _input_segments(req)
+    if segments:
+        segments[0].meta["raw_body_bytes"] = len(raw_body)
     assert rec.profile is not None
 
     ctx = RequestContext(
