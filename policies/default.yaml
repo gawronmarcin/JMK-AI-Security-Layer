@@ -137,7 +137,31 @@ controls:
       strict:     {action: block, min_severity: low}
       balanced:   {action: block, min_severity: medium}
       permissive: {action: flag,  min_severity: high}
+    
+  pii_input:
+    id: C-PII-IN
+    threat_ids: [TH-03]
+    enabled: true
+    stages: [input]
+    # ip_address left out on purpose: users legitimately paste IPs when asking for network help
+    params: {types: [email, phone_pl, pesel, iban, credit_card]}
+    levels:
+      strict:     {action: block}
+      balanced:   {action: redact}
+      permissive: {action: flag}
 
+  secrets_input:
+    id: C-SECRET-IN
+    threat_ids: [TH-04]
+    enabled: true
+    stages: [input]
+    params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment]}
+    levels:
+      strict:     {action: block}
+      balanced:   {action: redact}
+      permissive: {action: redact}
+
+  
   pii_output:
     id: C-PII-OUT
     threat_ids: [TH-05]
@@ -153,7 +177,7 @@ controls:
     id: C-SECRET-OUT
     threat_ids: [TH-04]
     enabled: true
-    stages: [output, tool_result, input]
+    stages: [output, tool_result]
     params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment]}
     levels:
       strict:     {action: block}

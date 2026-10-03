@@ -1,0 +1,488 @@
+# C-PII-IN / C-PII-OUT cases (R2)
+# Format: ARCHITECTURE.md section 11.3. All values are synthetic.
+# profile != balanced uses identity `admin` because support-agent-01 pins profile: balanced.
+# Prerequisites: policy entries pii_input/secrets_input, mock scenarios echo, fixed:<text>, leak_pii, leak_secret.
+
+- id: PII-OUT-001
+  title: "Email in model output is redacted (balanced), mock leak scenario"
+  kind: negative
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-001, X-Mock-Scenario: "leak_pii"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Who is the customer?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        threat_ids: [TH-05]
+        upstream_called: true
+        response_contains: ["[REDACTED:email]"]
+        response_not_contains: ["jan.kowalski@example.com"]
+
+- id: PII-OUT-002
+  title: "Credit card (Luhn-valid) in output is redacted (balanced)"
+  kind: negative
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-002, X-Mock-Scenario: "fixed:Customer card: 4111 1111 1111 1111, expires soon."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Show the payment details."}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        threat_ids: [TH-05]
+        upstream_called: true
+        response_contains: ["[REDACTED:credit_card]"]
+        response_not_contains: ["4111 1111 1111 1111"]
+
+- id: PII-OUT-003
+  title: "PESEL in output blocks the response (strict)"
+  kind: negative
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: strict
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-003, X-Mock-Scenario: "fixed:PESEL of the customer is 44051401458."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Who is the customer?"}]}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-PII-OUT]
+        threat_ids: [TH-05]
+        upstream_called: true
+
+- id: PII-OUT-004
+  title: "IBAN in output is redacted (balanced)"
+  kind: negative
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-004, X-Mock-Scenario: "fixed:Refund to IBAN PL61 1090 1014 0000 0712 1981 2874 today."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Where do we send the refund?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        threat_ids: [TH-05]
+        upstream_called: true
+        response_contains: ["[REDACTED:iban]"]
+        response_not_contains: ["PL61 1090 1014 0000 0712 1981 2874"]
+
+- id: PII-OUT-005
+  title: "Polish phone number in output is redacted (balanced)"
+  kind: negative
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-005, X-Mock-Scenario: "fixed:Call the customer on +48 600 123 456."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "How do I reach the customer?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        threat_ids: [TH-05]
+        upstream_called: true
+        response_contains: ["[REDACTED:phone_pl]"]
+        response_not_contains: ["+48 600 123 456"]
+
+- id: PII-OUT-006
+  title: "Bare 9-digit order id is not a phone number"
+  kind: positive
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-006, X-Mock-Scenario: "fixed:Your order 123456789 has shipped."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Status?"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["Your order 123456789 has shipped."]
+
+- id: PII-OUT-007
+  title: "PESEL with wrong checksum is not PII"
+  kind: positive
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-007, X-Mock-Scenario: "fixed:The PESEL 44051401459 failed validation."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Status?"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["The PESEL 44051401459 failed validation."]
+
+- id: PII-OUT-008
+  title: "Card number failing Luhn is not a card"
+  kind: positive
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-008, X-Mock-Scenario: "fixed:The test card 4111 1111 1111 1112 is invalid."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Status?"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["The test card 4111 1111 1111 1112 is invalid."]
+
+- id: PII-OUT-009
+  title: "13-digit timestamp is not a card"
+  kind: positive
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-009, X-Mock-Scenario: "fixed:Request id 1696350000000 was processed."}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Status?"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["Request id 1696350000000 was processed."]
+
+- id: PII-OUT-010
+  title: "IBAN followed by an uppercase word keeps an exact redaction span"
+  kind: edge
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-010, X-Mock-Scenario: "fixed:Pay PL61 1090 1014 0000 0712 1981 2874 THE END"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Where to pay?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        upstream_called: true
+        response_contains: ["[REDACTED:iban] THE END"]
+        response_not_contains: ["PL61 1090 1014 0000 0712 1981 2874"]
+
+- id: PII-OUT-011
+  title: "Same leak is only flagged under the permissive profile (email kept)"
+  kind: edge
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: permissive
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-011, X-Mock-Scenario: "leak_pii"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Who is the customer?"}]}
+      expect:
+        status: 200
+        action: flag
+        control_ids: [C-PII-OUT]
+        upstream_called: true
+        response_contains: ["jan.kowalski@example.com"]
+
+- id: PII-OUT-012
+  title: "Shadow mode: would redact, but the response passes unchanged"
+  kind: edge
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay: {"controls": {"pii_output": {"mode": "shadow"}}}
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-012, X-Mock-Scenario: "fixed:Contact jan.kowalski@example.com"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Who is the contact?"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["jan.kowalski@example.com"]
+
+- id: PII-OUT-013
+  title: "Uppercase email address is still detected"
+  kind: edge
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-013, X-Mock-Scenario: "fixed:Mail: JAN.KOWALSKI@EXAMPLE.COM"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Contact?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        upstream_called: true
+        response_contains: ["[REDACTED:email]"]
+        response_not_contains: ["JAN.KOWALSKI@EXAMPLE.COM"]
+
+- id: PII-OUT-014
+  title: "Two PII types in one response are both redacted"
+  kind: edge
+  controls: [C-PII-OUT]
+  threats: [TH-05]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-out-014, X-Mock-Scenario: "fixed:Contact jan.kowalski@example.com or +48 600 123 456"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Contact?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-OUT]
+        upstream_called: true
+        response_contains: ["[REDACTED:email]", "[REDACTED:phone_pl]"]
+        response_not_contains: ["jan.kowalski@example.com", "+48 600 123 456"]
+
+- id: PII-IN-001
+  title: "Email in the prompt is redacted before the upstream (balanced)"
+  kind: negative
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-001, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "My email is jan.kowalski@example.com, please update my account."}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-IN]
+        threat_ids: [TH-03]
+        upstream_called: true
+        response_contains: ["[REDACTED:email]"]
+        response_not_contains: ["jan.kowalski@example.com"]
+
+- id: PII-IN-002
+  title: "PESEL in the prompt is redacted (balanced)"
+  kind: negative
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-002, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "My PESEL is 44051401458."}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-IN]
+        threat_ids: [TH-03]
+        upstream_called: true
+        response_contains: ["[REDACTED:pesel]"]
+        response_not_contains: ["44051401458"]
+
+- id: PII-IN-003
+  title: "Card number in the prompt is blocked and never reaches the upstream (strict)"
+  kind: negative
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: strict
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-003, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Charge card 4111 1111 1111 1111."}]}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-PII-IN]
+        threat_ids: [TH-03]
+        upstream_called: false
+
+- id: PII-IN-004
+  title: "IBAN in the prompt is redacted (balanced)"
+  kind: negative
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-004, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Send the refund to PL61 1090 1014 0000 0712 1981 2874."}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-IN]
+        threat_ids: [TH-03]
+        upstream_called: true
+        response_contains: ["[REDACTED:iban]"]
+        response_not_contains: ["PL61 1090 1014 0000 0712 1981 2874"]
+
+- id: PII-IN-005
+  title: "Plain prompt passes"
+  kind: positive
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-005, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Please summarise this support ticket."}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["Please summarise this support ticket."]
+
+- id: PII-IN-006
+  title: "Bare 9-digit order id in prompt passes"
+  kind: positive
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-006, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Order 123456789 is late."}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["Order 123456789 is late."]
+
+- id: PII-IN-007
+  title: "PESEL with wrong checksum in prompt passes"
+  kind: positive
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-007, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "PESEL 44051401459 looks wrong."}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["PESEL 44051401459 looks wrong."]
+
+- id: PII-IN-008
+  title: "Card number written with dashes is redacted"
+  kind: edge
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-008, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Card 4111-1111-1111-1111 was declined."}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-IN]
+        upstream_called: true
+        response_contains: ["[REDACTED:credit_card]"]
+        response_not_contains: ["4111-1111-1111-1111"]
+
+- id: PII-IN-009
+  title: "PII in an earlier user message of the history is still caught"
+  kind: edge
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-009, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "My email is jan.kowalski@example.com."}, {"role": "assistant", "content": "Thanks, noted."}, {"role": "user", "content": "And now?"}]}
+      expect:
+        status: 200
+        action: redact
+        control_ids: [C-PII-IN]
+        upstream_called: true
+
+- id: PII-IN-010
+  title: "Contact data in the system prompt is not treated as user PII"
+  kind: edge
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-010, X-Mock-Scenario: "fixed:ok"}
+        body: {model: mock-commercial, messages: [{"role": "system", "content": "Support mailbox: helpdesk@example.com"}, {"role": "user", "content": "hello"}]}
+      expect:
+        status: 200
+        action: allow
+        upstream_called: true
+        response_contains: ["ok"]
+
+- id: PII-IN-011
+  title: "PII in the prompt is only flagged under the permissive profile"
+  kind: edge
+  controls: [C-PII-IN]
+  threats: [TH-03]
+  profile: permissive
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-pii-in-011, X-Mock-Scenario: "echo"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "My email is jan.kowalski@example.com."}]}
+      expect:
+        status: 200
+        action: flag
+        control_ids: [C-PII-IN]
+        upstream_called: true
+        response_contains: ["jan.kowalski@example.com"]
