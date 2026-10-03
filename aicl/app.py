@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from aicl import feeds, registry
 from aicl.audit import AuditWriter
 from aicl.flows.chat import handle_chat
-from aicl.flows.common import FlowResponse
+from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
 from aicl.models import Control
 from aicl.policy.loader import load_policy_file
 from aicl.proxy import UpstreamClient
@@ -98,10 +98,28 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
-        flow = await handle_chat(rt, await request.body(), _headers(request))
+        flow = await handle_chat(rt, _body_reader(request), _headers(request))
         return _respond(flow)
 
     return app
+
+
+def _body_reader(request: Request) -> BodyReader:
+    """Reads the body only when the flow asks, stopping as soon as it exceeds the limit."""
+
+    async def read(limit: int | None) -> bytes:
+        if limit is not None:
+            declared = request.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > limit:
+                raise BodyTooLarge(int(declared))
+        buf = bytearray()
+        async for chunk in request.stream():
+            buf += chunk
+            if limit is not None and len(buf) > limit:
+                raise BodyTooLarge(len(buf))
+        return bytes(buf)
+
+    return read
 
 
 def _headers(request: Request) -> dict[str, str]:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 from fake_upstream import make_fake_upstream
 
 from aicl.app import create_app
@@ -46,13 +47,25 @@ class Gateway:
         return next(e for e in await self.events() if e.request_id == rid)
 
 
+def _merge(base, overlay):
+    for k, v in overlay.items():
+        base[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return base
+
+
 @asynccontextmanager
-async def serve(tmp_path, env=ENV, **kw):
-    """Started gateway wired to a fresh fake upstream."""
+async def serve(tmp_path, env=ENV, policy_overlay=None, **kw):
+    """Started gateway wired to a fresh fake upstream. `policy_overlay` is deep-merged into
+    the default policy and written to a temp file (the compiled policy itself is immutable)."""
     upstream, calls = make_fake_upstream()
     audit = tmp_path / "audit.jsonl"
+    policy_path = REPO / "policies" / "default.yaml"
+    if policy_overlay:
+        data = _merge(yaml.safe_load(policy_path.read_text(encoding="utf-8")), policy_overlay)
+        policy_path = tmp_path / "policy.yaml"
+        policy_path.write_text(yaml.safe_dump(data), encoding="utf-8")
     app = create_app(
-        REPO / "policies" / "default.yaml",
+        policy_path,
         env=env,
         base_dir=REPO,
         audit_path=audit,
@@ -181,7 +194,6 @@ async def test_agent_impersonation_is_rejected(gw):
         (b'{"model": "mock-commercial", "messages": []}', "messages"),
         (b'{"messages": [{"role": "user", "content": "x"}]}', "model"),
         (b'{"model": "mock-commercial", "messages": [{"role": "wizard", "content": "x"}]}', "wizard"),
-        (b'{"model": "gpt-9", "messages": [{"role": "user", "content": "x"}]}', "unknown model"),
     ],
 )
 async def test_bad_requests(gw, payload, fragment):
@@ -194,6 +206,16 @@ async def test_bad_requests(gw, payload, fragment):
     assert fragment in r.json()["error"]["message"]
     e = await gw.request_event(r)
     assert e.final_action is None and fragment in e.error
+
+
+async def test_unknown_model(gw):
+    # A role without the model is stopped by C-MODEL-ALLOW (TH-06) ...
+    r = await gw.chat("x", model="gpt-9")
+    assert r.status_code == 403 and r.json()["error"]["control_id"] == "C-MODEL-ALLOW"
+    # ... a wildcard role passes the allowlist, but the gateway has no route for the model.
+    r = await gw.chat("x", key="admin", model="gpt-9")
+    assert r.status_code == 400 and "unknown model" in r.json()["error"]["message"]
+    assert gw.calls == []
 
 
 @pytest.mark.parametrize("scenario", ["error:500", "error:404"])
@@ -294,3 +316,68 @@ async def test_healthz(gw):
         "policy_version": gw.app.state.runtime.policy.version,
         "feed_version": "2026-10-03.1",
     }
+
+
+async def test_disallowed_model_is_blocked_by_c_model_allow(gw):
+    # researcher only allows ollama-local; mock-commercial should be blocked at ingress
+    r = await gw.chat("hello", key="research", model="mock-commercial")
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["type"] == "aicl_blocked"
+    assert err["control_id"] == "C-MODEL-ALLOW"
+    assert err["threat_ids"] == ["TH-06"]
+    assert gw.calls == []
+    e = await gw.request_event(r)
+    assert e.final_action == Action.block and not e.upstream_called
+    assert e.decisions[0].control_id == "C-MODEL-ALLOW"
+
+
+def _size_overlay(**params):
+    return {"controls": {"size_limits": {"params": params}}}
+
+
+async def test_oversized_message_is_blocked_by_c_size(tmp_path):
+    async with serve(tmp_path, policy_overlay=_size_overlay(max_chars_per_message=20)) as g:
+        r = await g.chat("A" * 50)
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["type"] == "aicl_blocked" and err["control_id"] == "C-SIZE" and err["threat_ids"] == ["TH-20"]
+    assert g.calls == []
+
+
+async def test_oversized_body_is_rejected_before_parsing(tmp_path):
+    async with serve(tmp_path, policy_overlay=_size_overlay(max_body_bytes=200)) as g:
+        r = await g.chat("A" * 500)
+        assert r.status_code == 403
+        err = r.json()["error"]
+        assert err["control_id"] == "C-SIZE" and err["threat_ids"] == ["TH-20"]
+        e = await g.request_event(r)
+        assert e.final_action == Action.block and not e.upstream_called
+        assert e.decisions[0].matches[0].kind == "body_size_limit"
+        assert e.model is None  # rejected before the body was parsed
+        assert (await g.chat("short")).status_code == 200
+
+
+async def test_body_limit_checked_only_after_authentication(tmp_path):
+    async with serve(tmp_path, policy_overlay=_size_overlay(max_body_bytes=200)) as g:
+        r = await g.chat("A" * 500, key="nope")
+    assert r.status_code == 401
+
+
+async def test_body_limit_respects_flag_and_shadow(tmp_path):
+    flag = {
+        "controls": {
+            "size_limits": {"params": {"max_body_bytes": 200}, "levels": {"balanced": {"action": "flag"}}}
+        }
+    }
+    async with serve(tmp_path, policy_overlay=flag) as g:
+        r = await g.chat("A" * 500)
+        assert r.status_code == 200 and r.headers["X-AICL-Action"] == "flag"
+        assert (await g.request_event(r)).decisions[0].control_id == "C-SIZE"
+
+    shadow = _merge(_size_overlay(max_body_bytes=200), {"controls": {"size_limits": {"mode": "shadow"}}})
+    async with serve(tmp_path, policy_overlay=shadow) as g:
+        r = await g.chat("A" * 500)
+        assert r.status_code == 200 and r.headers["X-AICL-Action"] == "allow"
+        e = await g.request_event(r)
+        assert e.shadow and e.would_have_action == Action.block

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aicl.engine import run_stage
 from aicl.errors import GatewayError
-from aicl.flows.common import FlowResponse, RequestRecord, stop_if_blocked
+from aicl.flows.common import BodyReader, FlowResponse, RequestRecord, stop_if_blocked
 from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
 from aicl.policy.schema import ModelSpec
@@ -125,20 +125,22 @@ def _usage(
     )
 
 
-async def handle_chat(rt: Runtime, raw_body: bytes, headers: Mapping[str, str]) -> FlowResponse:
+async def handle_chat(rt: Runtime, read_body: BodyReader, headers: Mapping[str, str]) -> FlowResponse:
     rec = RequestRecord(rt=rt, endpoint="chat", headers=headers)
     try:
-        return await _run(rt, rec, raw_body, headers)
+        return await _run(rt, rec, read_body, headers)
     except GatewayError as exc:
         return rec.fail(exc)
     finally:
         await _account(rt, rec)
 
 
-async def _run(rt: Runtime, rec: RequestRecord, raw_body: bytes, headers: Mapping[str, str]) -> FlowResponse:
+async def _run(
+    rt: Runtime, rec: RequestRecord, read_body: BodyReader, headers: Mapping[str, str]
+) -> FlowResponse:
     policy = rec.policy
     identity = rec.authenticate()
-    req, data = _parse(raw_body)
+    req, data = _parse(await rec.read_body(read_body))
     rec.model = req.model
     segments = _input_segments(req)
     assert rec.profile is not None
