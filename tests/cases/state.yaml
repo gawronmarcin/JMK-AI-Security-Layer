@@ -1,0 +1,81 @@
+# C-LOOP (TH-13), C-BUDGET (TH-11/12) — przypadki wieloetapowe
+- id: LOOP-001
+  title: Fourth identical tool call within the window is blocked
+  kind: negative
+  controls: [C-LOOP]
+  threats: [TH-13]
+  identity: support-agent-01
+  steps:
+    - repeat: 3
+      request:
+        endpoint: tool_invoke
+        headers: {X-AICL-Session: s-loop-001}
+        body: {tool: search_docs, arguments: {query: "same query"}}
+      expect: {status: 200}
+    - request:
+        endpoint: tool_invoke
+        headers: {X-AICL-Session: s-loop-001}
+        body: {tool: search_docs, arguments: {query: "same query"}}
+      expect: {status: 403, action: block, control_ids: [C-LOOP], upstream_called: false}
+
+- id: LOOP-002
+  title: Different arguments are not a loop
+  kind: positive
+  controls: [C-LOOP]
+  threats: [TH-13]
+  identity: support-agent-01
+  steps:
+    - {request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-002}, body: {tool: search_docs, arguments: {query: "a"}}}, expect: {status: 200}}
+    - {request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-002}, body: {tool: search_docs, arguments: {query: "b"}}}, expect: {status: 200}}
+    - {request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-002}, body: {tool: search_docs, arguments: {query: "c"}}}, expect: {status: 200}}
+    - {request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-002}, body: {tool: search_docs, arguments: {query: "d"}}}, expect: {status: 200}}
+
+- id: LOOP-003
+  title: Same call in different sessions is not a loop
+  kind: edge
+  controls: [C-LOOP]
+  threats: [TH-13]
+  identity: support-agent-01
+  steps:
+    - repeat: 3
+      request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-003a}, body: {tool: search_docs, arguments: {query: "x"}}}
+      expect: {status: 200}
+    - request: {endpoint: tool_invoke, headers: {X-AICL-Session: s-loop-003b}, body: {tool: search_docs, arguments: {query: "x"}}}
+      expect: {status: 200}
+
+- id: BUDGET-001
+  title: Token budget exceeded returns 429 before reaching upstream
+  kind: negative
+  controls: [C-BUDGET]
+  threats: [TH-11]
+  identity: support-agent-01
+  policy_overlay:
+    budgets: {support_default: {max_tokens: 1000}}
+  steps:
+    - repeat: 2
+      request:
+        endpoint: chat
+        headers: {X-Mock-Scenario: "tokens:400:200"}
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200}
+    - request:
+        endpoint: chat
+        headers: {X-Mock-Scenario: "tokens:400:200"}
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 429, upstream_called: false}
+
+- id: BUDGET-002
+  title: Usage under the limit passes
+  kind: positive
+  controls: [C-BUDGET]
+  threats: [TH-11]
+  identity: support-agent-01
+  policy_overlay:
+    budgets: {support_default: {max_tokens: 100000}}
+  steps:
+    - repeat: 3
+      request:
+        endpoint: chat
+        headers: {X-Mock-Scenario: "tokens:400:200"}
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200}

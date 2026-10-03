@@ -305,8 +305,10 @@ class CompiledPolicy:
         return self.raw.budgets.get(r.budget) if r and r.budget else None
 
     def role_allows_model(self, role: str | None, model: str) -> bool:
+        """`models` in the policy is the allowlist: "*" means any model defined there,
+        never an undeclared one (TH-06)."""
         r = self.role(role)
-        return r is not None and ("*" in r.models or model in r.models)
+        return r is not None and model in self.models and ("*" in r.models or model in r.models)
 
     def role_allows_tool(self, role: str | None, tool: str) -> bool:
         r = self.role(role)

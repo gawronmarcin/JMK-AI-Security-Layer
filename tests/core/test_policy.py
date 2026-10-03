@@ -46,7 +46,8 @@ def test_role_helpers():
     p = load_policy_file(DEFAULT, ENV)
     assert p.role_allows_model("support_agent", "mock-commercial")
     assert not p.role_allows_model("researcher", "mock-commercial")
-    assert p.role_allows_model("admin", "anything")
+    assert p.role_allows_model("admin", "ollama-local")
+    assert not p.role_allows_model("admin", "anything")  # "*" = any model defined in the policy
     assert p.role_allows_tool("support_agent", "send_email")
     assert not p.role_allows_tool("support_agent", "run_shell")
     assert p.budget_for("researcher").max_cost_usd is None

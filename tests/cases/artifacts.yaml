@@ -1,0 +1,19 @@
+# C-ARTIFACT (TH-14). Bajty budują generatory z tests/payloads/artifacts.py — NIGDY nie są ładowane.
+- {id: ART-001, title: "Protocol-0 pickle calling os.system is blocked", kind: negative, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_os_system_p0}}, expect: {status: 403, action: block, control_ids: [C-ARTIFACT]}}]}
+- {id: ART-002, title: "Protocol-4 STACK_GLOBAL os.system is blocked", kind: negative, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_os_system_p4}}, expect: {status: 403}}]}
+- {id: ART-003, title: "torch-like zip with malicious data.pkl is blocked", kind: negative, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: torch_like_zip_malicious}}, expect: {status: 403}}]}
+- {id: ART-004, title: "Benign pickle passes", kind: positive, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_benign}}, expect: {status: 200}}]}
+- {id: ART-005, title: "Benign torch-like zip passes", kind: positive, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: torch_like_zip_benign}}, expect: {status: 200}}]}
+- {id: ART-006, title: "safetensors file passes", kind: positive, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: safetensors_benign}}, expect: {status: 200}}]}
+- {id: ART-007, title: "Broken stream with payload before the break is blocked", kind: edge, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_broken_after_payload}}, expect: {status: 403}}]}
+- {id: ART-008, title: "posix.system (how os.system pickles on Linux) is blocked", kind: edge, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_posix_system}}, expect: {status: 403}}]}
+- {id: ART-009, title: "Unknown archive format is refused, not skipped", kind: edge, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
+   steps: [{request: {endpoint: artifact_scan, artifact: {generator: unknown_archive_7z}}, expect: {status: 403}}]}

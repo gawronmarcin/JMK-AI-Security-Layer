@@ -1,0 +1,112 @@
+# C-AUTH (TH-08), C-MODEL-ALLOW (TH-06), C-TOOL-ACL (TH-07)
+- id: AUTH-001
+  title: Missing API key is rejected with 401
+  kind: negative
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        auth: none
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 401, upstream_called: false}
+
+- id: AUTH-002
+  title: Invalid API key is rejected with 401
+  kind: negative
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        auth: invalid
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 401, upstream_called: false}
+
+- id: AUTH-003
+  title: Valid key passes
+  kind: positive
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200, upstream_called: true}
+
+- id: MODEL-001
+  title: Researcher may not use the commercial model
+  kind: negative
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 403, action: block, control_ids: [C-MODEL-ALLOW], upstream_called: false}
+
+- id: MODEL-002
+  title: Unknown model name is blocked
+  kind: negative
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: gpt-unknown-9000, messages: [{role: user, content: "hi"}]}
+      expect: {status: 403, upstream_called: false}
+
+- id: MODEL-003
+  title: Hot-reloadable allowlist — overlay grants the model
+  kind: edge
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: research-agent-01
+  policy_overlay:
+    roles: {researcher: {models: [ollama-local, mock-commercial]}}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200, upstream_called: true}
+
+- id: TOOL-001
+  title: Support agent may not call run_shell
+  kind: negative
+  controls: [C-TOOL-ACL]
+  threats: [TH-07]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: run_shell, arguments: {cmd: "ls"}}
+      expect: {status: 403, action: block, control_ids: [C-TOOL-ACL], upstream_called: false}
+
+- id: TOOL-002
+  title: Allowed tool is forwarded to its backend
+  kind: positive
+  controls: [C-TOOL-ACL]
+  threats: [TH-07]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "warranty"}}
+      expect: {status: 200, upstream_called: true}
+
+- id: TOOL-003
+  title: Unknown tool name is blocked
+  kind: negative
+  controls: [C-TOOL-ACL]
+  threats: [TH-07]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delete_database, arguments: {}}
+      expect: {status: 403, upstream_called: false}

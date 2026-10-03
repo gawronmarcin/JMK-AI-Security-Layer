@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aicl"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI Control Layer: security gateway between agents and LLMs, tools and MCP servers"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,12 +14,18 @@ dependencies = [
     "pydantic>=2.6",
     "pyyaml>=6.0",
     "jsonschema>=4.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
-dev = [
+test = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "asgi-lifespan>=2.1",
+    "pytest-xdist>=3.5",
+]
+dev = [
+    "aicl[test]",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -28,10 +34,17 @@ dev = [
 include = ["aicl*"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["live: needs a running Ollama, excluded from the default run"]
-addopts = "-m 'not live'"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# `live` tests (real Ollama) are skipped unless --live is given (tests/conftest.py).
+addopts = "-ra --strict-markers"
+markers = [
+    "live: needs a running Ollama (skipped by default, run with --live / make test-live)",
+    "perf: performance measurement (writes reports/perf.json)",
+    "gateway: needs the aicl gateway",
+]
+filterwarnings = ["default::UserWarning"]
 
 [tool.ruff]
 line-length = 110

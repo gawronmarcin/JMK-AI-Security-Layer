@@ -17,13 +17,13 @@ if str(REPO) not in sys.path:
 
 import httpx
 import pytest
+from fake_tools import make_mock_tools
 from fake_upstream import make_fake_upstream
 from policy_files import write_policy
 
 from aicl.app import create_app
 from aicl.audit import iter_events
 from aicl.models import Action
-from tests.mocks.mock_tools import make_mock_tools
 
 KEYS = {"support": "k-support", "research": "k-research", "admin": "k-admin"}
 ENV = {

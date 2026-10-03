@@ -1,7 +1,7 @@
 # C-BUDGET test cases (R3)
 # Format: ARCHITECTURE.md section 11.3.
 
-- id: BUDGET-001
+- id: BUDGET-003
   title: "Request within normal token and cost limits passes"
   kind: positive
   controls: [C-BUDGET]
@@ -17,7 +17,7 @@
         status: 200
         action: allow
 
-- id: BUDGET-002
+- id: BUDGET-004
   title: "Rate limit (RPM) exceeded blocks subsequent requests"
   kind: negative
   controls: [C-BUDGET]

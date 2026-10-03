@@ -199,13 +199,19 @@ async def test_bad_requests(gw, payload, fragment):
 
 
 async def test_unknown_model(gw):
-    # A role without the model is stopped by C-MODEL-ALLOW (TH-06) ...
-    r = await gw.chat("x", model="gpt-9")
-    assert r.status_code == 403 and r.json()["error"]["control_id"] == "C-MODEL-ALLOW"
-    # ... a wildcard role passes the allowlist, but the gateway has no route for the model.
-    r = await gw.chat("x", key="admin", model="gpt-9")
-    assert r.status_code == 400 and "unknown model" in r.json()["error"]["message"]
+    # Models missing from the policy allowlist are stopped by C-MODEL-ALLOW (TH-06),
+    # also for a wildcard role: "*" means any model defined in the policy.
+    for key in ("support", "admin"):
+        r = await gw.chat("x", key=key, model="gpt-9")
+        assert r.status_code == 403 and r.json()["error"]["control_id"] == "C-MODEL-ALLOW"
     assert gw.calls == []
+
+
+async def test_unknown_model_without_allowlist_control_is_bad_request(tmp_path):
+    overlay = {"controls": {"model_allowlist": {"enabled": False}}}
+    async with serve(tmp_path, policy_overlay=overlay) as g:
+        r = await g.chat("x", key="admin", model="gpt-9")
+    assert r.status_code == 400 and "unknown model" in r.json()["error"]["message"]
 
 
 @pytest.mark.parametrize("scenario", ["error:500", "error:404"])
@@ -409,3 +415,24 @@ async def test_rate_limit_answers_429_and_emits_budget_event(tmp_path):
         budget = [e for e in events if e.type == "budget.exceeded"]
         assert len(budget) == 1 and budget[0].identity == "support-agent-01"
         assert budget[0].request_id == r.headers["X-AICL-Request-Id"]
+
+
+async def test_admin_policy_validate_and_reload(gw):
+    admin = {"Authorization": "Bearer k-admin"}
+    valid = (REPO / "policies" / "default.yaml").read_text(encoding="utf-8")
+    r = await gw.client.post("/admin/policy/validate", content=valid, headers=admin)
+    assert r.status_code == 200 and r.json()["valid"] is True
+
+    r = await gw.client.post("/admin/policy/validate", content="version: 1\ncontorls: {}\n", headers=admin)
+    assert r.status_code == 400 and any("contorls" in e for e in r.json()["errors"])
+
+    r = await gw.client.post("/admin/policy/reload", headers=admin)
+    assert r.status_code == 200 and r.json()["reloaded"] is False  # file unchanged
+
+    for headers in ({"Authorization": "Bearer k-support"}, {}):
+        assert (
+            await gw.client.post("/admin/policy/validate", content=valid, headers=headers)
+        ).status_code in (
+            401,
+            403,
+        )

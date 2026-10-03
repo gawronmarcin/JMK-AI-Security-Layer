@@ -1,0 +1,52 @@
+# `docker compose up`                       -> gateway :8080 + mock LLM + mock tools
+# `docker compose run --rm tests`           -> pełny suite w kontenerze (§11.8)
+# `docker compose --profile ollama up`      -> dodatkowo prawdziwy Ollama
+x-app: &app
+  build: {context: ., dockerfile: docker/Dockerfile}
+  image: aicl:dev
+
+services:
+  mock-llm:
+    <<: *app
+    command: uvicorn tests.mocks.mock_llm:app --host 0.0.0.0 --port 9001
+    ports: ["9001:9001"]
+    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9001/healthz')"], interval: 5s, retries: 10}
+
+  mock-tools:
+    <<: *app
+    command: uvicorn tests.mocks.mock_tools:app --host 0.0.0.0 --port 9002
+    ports: ["9002:9002"]
+    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9002/healthz')"], interval: 5s, retries: 10}
+
+  gateway:
+    <<: *app
+    env_file: [.env.example]
+    environment:
+      AICL_UPSTREAM_MOCK_URL: http://mock-llm:9001/v1
+      AICL_OLLAMA_URL: ${AICL_OLLAMA_URL_OVERRIDE:-http://mock-llm:9001}
+      AICL_TOOL_DOCS_URL: http://mock-tools:9002/tools/search_docs
+      AICL_TOOL_FETCH_URL: http://mock-tools:9002/tools/fetch_url
+      AICL_TOOL_MAIL_URL: http://mock-tools:9002/tools/send_email
+      AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
+      WATCHFILES_FORCE_POLLING: "true"      # hot reload przez bind mount (macOS/Windows, §2)
+    volumes: ["./policies:/app/policies", "./feeds:/app/feeds", "./data:/app/data"]
+    ports: ["8080:8080"]
+    depends_on:
+      mock-llm: {condition: service_healthy}
+      mock-tools: {condition: service_healthy}
+
+  tests:
+    <<: *app
+    profiles: [tests]
+    command: pytest -q
+    environment: {AICL_TEST_REQUIRE_GATEWAY: "1"}
+    volumes: ["./reports:/app/reports"]
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ollama]
+    ports: ["11434:11434"]
+    volumes: ["ollama:/root/.ollama"]
+
+volumes:
+  ollama: {}

@@ -811,11 +811,14 @@ tests/
 
 `expect` keys: `status`, `action`, `control_ids`, `threat_ids`, `upstream_called`, `response_contains`, `response_not_contains`, `max_overhead_ms`. A case may have several `steps` (multi-turn sessions: loops, taint, budgets) and `repeat: N` on a step.
 
-`control_ids` lists controls that must have **acted** on the request: a decision with an action other than `allow`, not skipped and not shadow-suppressed (read from the audit event). `threat_ids` lists threat ids carried by those acting decisions. Positive cases express "nothing fired" with `action: allow` and normally leave both keys out.
+`control_ids` lists controls that must have **acted** on the request: `error.control_id` of a blocked response, plus every audit decision with an action other than `allow` that was not skipped. Shadow-suppressed decisions count, so shadow cases can assert what *would* have fired. `threat_ids` lists threat ids carried by those decisions. Positive cases express "nothing fired" with `action: allow` and normally leave both keys out. Runner: `tests/harness/runner.py`.
+
+Optional extensions used by the test harness (`tests/harness/case_schema.py`): `request.identity` (other identity for one step), `request.auth` (`identity` | `none` | `invalid`), `request.artifact` (`{generator, filename?, params?}` from `tests/payloads/artifacts.py`, for `artifact_scan`), case-level `tags` (e.g. `[live]`) and `xfail` (reason for a known gap).
 
 ### 11.4 Mock upstream behaviours (`X-Mock-Scenario` header)
 
 `echo` (returns the prompt), `fixed:<text>`, `leak_secret` (fake AWS key in output), `leak_pii` (fake PESEL/email/IBAN), `leak_canary`, `call_tool:<name>:<json-args>` (model proposes a tool call), `loop_tool:<name>` (always proposes the same call), `slow:<ms>`, `tokens:<in>:<out>` (controlled `usage`), `injection_in_output`, `error:502`. The mock exposes `GET /__calls` and `POST /__reset`; the runner uses it for `upstream_called`.
+Modifiers `slow:`, `tokens:` and `error:` may be prefixed with commas (`slow:300,tokens:10:20,leak_pii`); everything after them is one content scenario taken verbatim, commas included. The gateway forwards `X-Mock-Scenario` to LLM upstreams and tool backends. Mocks: `tests/mocks/mock_llm.py` (also serves the Ollama API and a scriptable semantic judge), `tests/mocks/mock_tools.py` (`POST /tools/<name>` with `{"tool", "arguments"}` -> `{"result": ...}`).
 Mock tools return scripted results, including a **poisoned document** (hidden instruction) and a **malicious "web page"** for indirect-injection and taint tests. All secrets/PII in test data are **fake** and clearly synthetic.
 
 ### 11.5 Required coverage per P0 control

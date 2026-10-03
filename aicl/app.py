@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from aicl import feeds, registry
+from aicl.admin import policy as admin_policy
 from aicl.audit import AuditWriter
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
@@ -99,6 +100,8 @@ def create_app(
 
     app = FastAPI(title="AI Control Layer", lifespan=lifespan)
     app.state.runtime = rt
+
+    app.include_router(admin_policy.router(rt))
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
