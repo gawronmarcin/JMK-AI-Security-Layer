@@ -6,8 +6,8 @@ from pathlib import Path
 
 import httpx
 import pytest
-import yaml
 from fake_upstream import make_fake_upstream
+from policy_files import merge, write_policy
 
 from aicl.app import create_app
 from aicl.audit import iter_events
@@ -47,25 +47,15 @@ class Gateway:
         return next(e for e in await self.events() if e.request_id == rid)
 
 
-def _merge(base, overlay):
-    for k, v in overlay.items():
-        base[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
-    return base
-
-
 @asynccontextmanager
 async def serve(tmp_path, env=ENV, policy_overlay=None, **kw):
     """Started gateway wired to a fresh fake upstream. `policy_overlay` is deep-merged into
-    the default policy and written to a temp file (the compiled policy itself is immutable)."""
+    the default policy and written to a temp file (the compiled policy itself is immutable).
+    The semantic judge is disabled so no test talks to Ollama."""
     upstream, calls = make_fake_upstream()
     audit = tmp_path / "audit.jsonl"
-    policy_path = REPO / "policies" / "default.yaml"
-    if policy_overlay:
-        data = _merge(yaml.safe_load(policy_path.read_text(encoding="utf-8")), policy_overlay)
-        policy_path = tmp_path / "policy.yaml"
-        policy_path.write_text(yaml.safe_dump(data), encoding="utf-8")
     app = create_app(
-        policy_path,
+        write_policy(tmp_path, policy_overlay),
         env=env,
         base_dir=REPO,
         audit_path=audit,
@@ -280,8 +270,8 @@ async def test_proposed_tool_calls_run_tool_call_stage(tmp_path):
             )
 
     async with serve(tmp_path, controls={"C-TOOL-ACL": ToolGuard()}) as g:
-        ok = await g.chat("x", scenario='tool_call:search_docs:{"query": "refunds"}')
-        blocked = await g.chat("x", scenario='tool_call:run_shell:{"cmd": "rm -rf /"}')
+        ok = await g.chat("x", scenario='call_tool:search_docs:{"query": "refunds"}')
+        blocked = await g.chat("x", scenario='call_tool:run_shell:{"cmd": "rm -rf /"}')
     assert ok.status_code == 200
     assert ok.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "search_docs"
     assert blocked.status_code == 403 and blocked.json()["error"]["control_id"] == "C-TOOL-ACL"
@@ -329,7 +319,8 @@ async def test_disallowed_model_is_blocked_by_c_model_allow(gw):
     assert gw.calls == []
     e = await gw.request_event(r)
     assert e.final_action == Action.block and not e.upstream_called
-    assert e.decisions[0].control_id == "C-MODEL-ALLOW"
+    blocking = [d for d in e.decisions if d.action == Action.block]
+    assert [d.control_id for d in blocking] == ["C-MODEL-ALLOW"]
 
 
 def _size_overlay(**params):
@@ -375,9 +366,46 @@ async def test_body_limit_respects_flag_and_shadow(tmp_path):
         assert r.status_code == 200 and r.headers["X-AICL-Action"] == "flag"
         assert (await g.request_event(r)).decisions[0].control_id == "C-SIZE"
 
-    shadow = _merge(_size_overlay(max_body_bytes=200), {"controls": {"size_limits": {"mode": "shadow"}}})
+    shadow = merge(_size_overlay(max_body_bytes=200), {"controls": {"size_limits": {"mode": "shadow"}}})
     async with serve(tmp_path, policy_overlay=shadow) as g:
         r = await g.chat("A" * 500)
         assert r.status_code == 200 and r.headers["X-AICL-Action"] == "allow"
         e = await g.request_event(r)
         assert e.shadow and e.would_have_action == Action.block
+
+
+async def test_tool_message_taints_session_and_blocks_privileged_tool(gw):
+    session = {"X-AICL-Session": "s-taint"}
+    r = await gw.client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer k-support"} | session,
+        json={
+            "model": "mock-commercial",
+            "messages": [{"role": "user", "content": "read it"}, {"role": "tool", "content": "doc text"}],
+        },
+    )
+    assert r.status_code == 200
+    assert (await gw.app.state.runtime.state.get_session("s-taint")).tainted
+
+    email = 'call_tool:send_email:{"to": "x@example.org", "subject": "s", "body": "b"}'
+    r = await gw.chat("send it", scenario=email, headers=session)
+    assert r.status_code == 403 and r.json()["error"]["control_id"] == "C-TAINT"
+    # an untainted session may still use the same tool
+    assert (
+        await gw.chat("send it", scenario=email, headers={"X-AICL-Session": "s-clean"})
+    ).status_code == 200
+
+
+async def test_rate_limit_answers_429_and_emits_budget_event(tmp_path):
+    overlay = {"budgets": {"support_default": {"max_requests_per_minute": 2}}}
+    async with serve(tmp_path, policy_overlay=overlay) as g:
+        assert [(await g.chat("hi")).status_code for _ in range(2)] == [200, 200]
+        r = await g.chat("hi")
+        assert r.status_code == 429
+        err = r.json()["error"]
+        assert err["type"] == "aicl_budget_exceeded" and err["control_id"] == "C-BUDGET"
+        assert r.headers["X-AICL-Action"] == "block"
+        events = await g.events()
+        budget = [e for e in events if e.type == "budget.exceeded"]
+        assert len(budget) == 1 and budget[0].identity == "support-agent-01"
+        assert budget[0].request_id == r.headers["X-AICL-Request-Id"]

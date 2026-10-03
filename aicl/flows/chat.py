@@ -145,6 +145,11 @@ async def _run(
     segments = _input_segments(req)
     assert rec.profile is not None
 
+    # §5.4: untrusted content (tool results) entering the session taints it; C-TAINT then
+    # blocks privileged tool calls for the rest of the session.
+    if any(s.trust == "untrusted" for s in segments):
+        await rt.state.mark_tainted(rec.session_id, "tool_result")
+
     ctx = RequestContext(
         request_id=rec.request_id,
         session_id=rec.session_id,
@@ -223,13 +228,17 @@ async def _account(rt: Runtime, rec: RequestRecord) -> None:
     if rec.identity is None:
         return
     budget = rec.policy.budget_for(rec.identity.role)
+    window = budget.window if budget else "day"
     usage = rec.usage or Usage()
     await rt.state.add_usage(
         rec.identity.id,
-        budget.window if budget else "day",
+        window,
         requests=1,
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         cost_usd=usage.cost_usd,
         compute_seconds=usage.compute_seconds,
     )
+    if window != "minute":
+        # max_requests_per_minute is checked against the minute window, whatever the budget window.
+        await rt.state.add_usage(rec.identity.id, "minute", requests=1)

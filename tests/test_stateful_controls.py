@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pytest
@@ -326,3 +325,20 @@ async def test_taint_guard_detects_session_tainted_in_store(policy):
     decision = await ctrl.evaluate(ctx, cfg)
     assert decision.action == Action.block
     assert decision.threat_ids == ["TH-19"]
+
+
+@pytest.mark.asyncio
+async def test_tool_acl_fails_closed_without_policy():
+    from aicl.policy.schema import ControlLevelConfig
+
+    cfg = ControlLevelConfig(
+        control_key="tool_acl", control_id="C-TOOL-ACL", threat_ids=["TH-07"],
+        action=Action.block, mode="enforce", on_error="fail_closed",
+    )  # fmt: skip
+    ctx = RequestContext(
+        request_id="r", session_id="s", endpoint="chat", stage=Stage.tool_call, identity="i",
+        role="support_agent", profile="balanced", model="m", segments=[], tool="search_docs",
+        tool_args={"query": "q"}, policy_version="v",
+    )  # fmt: skip
+    dec = await ToolAcl().evaluate(ctx, cfg)
+    assert dec.action == Action.block and "policy not attached" in dec.reason

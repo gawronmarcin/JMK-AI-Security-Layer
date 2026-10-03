@@ -272,7 +272,9 @@ class ControlLevelConfig(BaseModel):
 
     @property
     def policy(self) -> CompiledPolicy:
-        assert self._policy is not None, "ControlLevelConfig not attached to a CompiledPolicy"
+        if self._policy is None:
+            # AttributeError (not assert) so `getattr(cfg, "policy", None)` works in controls.
+            raise AttributeError("ControlLevelConfig is not attached to a CompiledPolicy")
         return self._policy
 
 

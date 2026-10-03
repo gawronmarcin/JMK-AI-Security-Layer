@@ -29,6 +29,7 @@ from aicl import feeds, registry
 from aicl.audit import AuditWriter
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
+from aicl.integrations import semantic_judge_listener
 from aicl.models import Control
 from aicl.policy.loader import load_policy_file
 from aicl.proxy import UpstreamClient
@@ -46,6 +47,7 @@ def create_app(
     audit_path: str | Path | None = None,
     upstream_transport: httpx.AsyncBaseTransport | None = None,
     controls: Mapping[str, Control] | None = None,
+    reload_interval: float | None = 1.0,
 ) -> FastAPI:
     """Build the gateway. Raises PolicyError if the policy is invalid (fail fast at startup).
 
@@ -53,11 +55,15 @@ def create_app(
     base_dir:           relative paths (audit, feeds) resolve against it; defaults to cwd
     upstream_transport: httpx transport for LLM upstreams (tests: ASGITransport of a mock)
     controls:           control set to run; defaults to every registered control
+    reload_interval:    seconds between policy/feed file checks; None disables hot reload
+                        (`app.state.runtime.reload_policy()` still works)
     """
     env = os.environ if env is None else env
     base = Path.cwd() if base_dir is None else Path(base_dir)
     policy_path = Path(policy_path or env.get("AICL_POLICY") or DEFAULT_POLICY)
-    policy = load_policy_file(policy_path if policy_path.is_absolute() else base / policy_path, env)
+    if not policy_path.is_absolute():
+        policy_path = base / policy_path
+    policy = load_policy_file(policy_path, env)
 
     if controls is None:
         registry.discover()
@@ -74,6 +80,9 @@ def create_app(
         upstream=UpstreamClient(env, transport=upstream_transport),
         feeds=feeds.store,
         controls=controls,
+        policy_path=policy_path,
+        reload_interval=reload_interval,
+        policy_listeners=[semantic_judge_listener(env)],
     )
     set_store(rt.state)
 

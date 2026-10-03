@@ -52,7 +52,7 @@ class ModelAllowlist:
         # fail closed rather than let every model through.
         try:
             policy = cfg.policy
-        except (AttributeError, AssertionError):
+        except AttributeError:
             policy = None
         allowed = policy is not None and policy.role_allows_model(ctx.role, ctx.model)
 

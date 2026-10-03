@@ -30,6 +30,8 @@ from aicl.utils import new_id
 AUTH_CONTROL_ID = "C-AUTH"
 AUTH_THREATS = ["TH-08"]
 SIZE_CONTROL_ID = "C-SIZE"
+# Blocks by these controls are answered as 429 aicl_budget_exceeded (§5.3).
+_BUDGET_CONTROLS = frozenset({"C-BUDGET"})
 
 
 class BodyTooLarge(Exception):
@@ -220,6 +222,22 @@ class RequestRecord:
             self.extra_decisions.append(exc.decision)  # raised outside the engine (C-AUTH, body size)
         action = _ERROR_ACTION.get(exc.type)
         self.emit(action, error=None if action is not None else exc.message)
+        if exc.type == ErrorType.budget_exceeded:
+            self.rt.audit.emit(
+                new_event(
+                    "budget.exceeded",
+                    request_id=self.request_id,
+                    session_id=self.session_id,
+                    endpoint=self.endpoint,
+                    identity=self.identity.id if self.identity else None,
+                    role=self.identity.role if self.identity else None,
+                    policy_version=self.policy.version,
+                    detail={
+                        "control_id": exc.decision.control_id if exc.decision else None,
+                        "reason": exc.message,
+                    },
+                )
+            )
         return FlowResponse(
             status=exc.status,
             body=exc.body(self.request_id).model_dump(mode="json"),
@@ -247,4 +265,6 @@ def stop_if_blocked(result: StageResult) -> None:
     d = result.blocking
     if result.action == Action.require_approval:
         raise GatewayError(ErrorType.approval_required, f"approval required by {d.control_id}: {d.reason}", d)
+    if d.control_id in _BUDGET_CONTROLS:  # §5.3: budget exceeded is 429, not 403
+        raise GatewayError(ErrorType.budget_exceeded, f"budget exceeded ({d.control_id}): {d.reason}", d)
     raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {d.reason}", d)

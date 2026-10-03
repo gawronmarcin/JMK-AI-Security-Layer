@@ -67,14 +67,18 @@ class ToolAcl:
                 reason="no tool specified in context",
             )
 
-        policy = getattr(cfg, "policy", None)
+        try:
+            policy = cfg.policy
+        except AttributeError:
+            policy = None
         if policy is None:
-            # Standalone / test mode without attached CompiledPolicy
+            # Without the policy the role's tools are unknown: fail closed (authorization control).
             return Decision(
                 control_id=self.id,
                 threat_ids=threat_ids,
-                action=Action.allow,
-                reason="policy not attached",
+                action=action,
+                severity="high",
+                reason="policy not attached, tool permissions unknown",
             )
 
         # 1. Role ACL check

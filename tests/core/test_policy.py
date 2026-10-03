@@ -121,3 +121,17 @@ def test_compiled_level_config_is_immutable():
         cfg.action = Action.allow
     with pytest.raises(ValidationError):
         cfg.types = []
+
+
+def test_unattached_cfg_policy_raises_attribute_error():
+    from aicl.policy.schema import ControlLevelConfig
+
+    cfg = ControlLevelConfig(
+        control_key="k",
+        control_id="C-X",
+        threat_ids=[],
+        action=Action.block,
+        mode="enforce",
+        on_error="fail_closed",
+    )
+    assert getattr(cfg, "policy", None) is None

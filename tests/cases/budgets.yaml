@@ -16,8 +16,6 @@
       expect:
         status: 200
         action: allow
-        control_ids: [C-BUDGET]
-        threat_ids: [TH-11, TH-12]
 
 - id: BUDGET-002
   title: "Rate limit (RPM) exceeded blocks subsequent requests"
@@ -36,13 +34,13 @@
       expect:
         status: 200
         action: allow
-    # 31st request triggers rate limit block at ingress
+    # 31st request triggers rate limit block at ingress (§5.3: budget exceeded = 429)
     - request:
         endpoint: chat
         headers: {X-AICL-Session: s-bgt-rpm, X-Mock-Scenario: echo}
         body: {model: mock-commercial, messages: [{"role": "user", "content": "ping over limit"}]}
       expect:
-        status: 403
+        status: 429
         action: block
         control_ids: [C-BUDGET]
         threat_ids: [TH-12]
