@@ -1,4 +1,9 @@
-#placeholder zeby testy dzialaly
+"""Controls package: one module per control family, auto-discovered by `aicl.registry.discover()`.
 
-def register_control(cls):
-    return cls
+Register controls with `aicl.registry.register_control`. It is re-exported here only for
+modules that import it from this package.
+"""
+
+from aicl.registry import register_control
+
+__all__ = ["register_control"]

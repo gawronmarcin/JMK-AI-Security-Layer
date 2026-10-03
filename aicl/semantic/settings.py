@@ -7,8 +7,9 @@ with R1 (the contract only defines `evaluate(ctx, cfg)`, which has no access to 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
@@ -30,7 +31,7 @@ class SemanticSettings:
         return bool(self.model) and not self.model.startswith("<")
 
     @classmethod
-    def from_policy(cls, sem: Mapping[str, Any] | None, env: Mapping[str, str] | None = None) -> "SemanticSettings":
+    def from_policy(cls, sem: Mapping[str, Any] | None, env: Mapping[str, str] | None = None) -> SemanticSettings:
         env = os.environ if env is None else env
         sem = sem or {}
         run_when = sem.get("run_when") or {}

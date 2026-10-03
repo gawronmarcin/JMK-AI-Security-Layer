@@ -16,7 +16,13 @@ import pytest
 from aicl.controls import injection_semantic as sem
 from aicl.models import Action, Origin, RequestContext, Segment, Stage
 from aicl.semantic.ollama import (
-    JudgeParseError, JudgeUnavailable, OllamaJudge, Verdict, build_messages, parse_verdict, truncate_middle,
+    JudgeParseError,
+    JudgeUnavailable,
+    OllamaJudge,
+    Verdict,
+    build_messages,
+    parse_verdict,
+    truncate_middle,
 )
 from aicl.semantic.settings import SemanticSettings
 

@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from aicl.models import Action, Decision, Match, Origin, RequestContext, Stage
+from aicl.models import Action, Decision, Match, Origin, RequestContext, Severity, Stage
 from aicl.registry import register_control
 
 # --------------------------------------------------------------------------- #
@@ -107,7 +107,7 @@ def _looks_like_password(value: str) -> bool:
 class Detector:
     kind: str
     pattern: re.Pattern[str]
-    severity: str                                   # low | medium | high | critical
+    severity: Severity                                 # low | medium | high | critical
     group: int = 0                                  # capture group that is the sensitive value
     validator: Callable[[str], bool] | None = None
     trim_trailing_groups: bool = False              # IBAN: retry without trailing words
@@ -302,18 +302,21 @@ class _ContentControl:
 
         matches: list[Match] = []
         seen: set[tuple[str, int, int, int]] = set()
-        top_sev = "low"
+        top_sev: Severity = "low"
+        threat_ids = list(_cfg_get(cfg, "threat_ids", None) or self.threat_ids)
 
         for seg in ctx.segments:
             if seg.origin not in origins:
                 continue
-            kinds_in_text: set[str] = set()
+            # Dedupe decoded hits by (kind, value), not by kind alone: a plain secret must not hide
+            # a *different* encoded secret of the same kind in the same segment.
+            values_reported: set[tuple[str, str]] = set()
             for d, start, end, raw in _scan(seg.text, detectors):
                 key = (d.kind, seg.idx, start, end)
                 if key in seen:
                     continue
                 seen.add(key)
-                kinds_in_text.add(d.kind)
+                values_reported.add((d.kind, raw))
                 matches.append(Match(kind=d.kind, segment_idx=seg.idx, start=start, end=end,
                                      masked=_mask(d.kind, raw)))
                 if _SEV_ORDER[d.severity] > _SEV_ORDER[top_sev]:
@@ -322,16 +325,16 @@ class _ContentControl:
             if self.scan_decoded:
                 for fragment in seg.decoded:
                     for d, _s, _e, raw in _scan(fragment, detectors):
-                        if d.kind in kinds_in_text:
-                            continue                       # already reported from original text
-                        kinds_in_text.add(d.kind)
+                        if (d.kind, raw) in values_reported:
+                            continue                       # same value already reported
+                        values_reported.add((d.kind, raw))
                         matches.append(Match(kind=d.kind, segment_idx=seg.idx,
                                              masked=_mask(d.kind, raw), in_decoded=True))
                         if _SEV_ORDER[d.severity] > _SEV_ORDER[top_sev]:
                             top_sev = d.severity
 
         if not matches:
-            return Decision(control_id=self.id, threat_ids=list(self.threat_ids),
+            return Decision(control_id=self.id, threat_ids=threat_ids,
                             action=Action.allow)
 
         kinds = sorted({m.kind for m in matches})
@@ -339,7 +342,7 @@ class _ContentControl:
         reason = f"{len(matches)} match(es): {', '.join(kinds)}"
         if decoded_n:
             reason += f" ({decoded_n} only in decoded/encoded text)"
-        return Decision(control_id=self.id, threat_ids=list(self.threat_ids), action=action,
+        return Decision(control_id=self.id, threat_ids=threat_ids, action=action,
                         severity=top_sev, reason=reason, matches=matches)
 
 

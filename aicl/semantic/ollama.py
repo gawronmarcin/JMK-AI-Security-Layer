@@ -185,7 +185,7 @@ class OllamaJudge:
                 timeout=self._timeout_s + 0.25,
             )
             resp.raise_for_status()
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, httpx.HTTPError) as exc:
             raise JudgeUnavailable(f"judge call failed: {type(exc).__name__}") from exc
         latency_ms = (time.perf_counter() - t0) * 1000.0
         try:

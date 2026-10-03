@@ -1,76 +1,17 @@
 """Unit tests for pii_secrets.py (R2). All data is synthetic.
 
-Run in the real repo:      pytest tests/test_pii_secrets.py -q
-Run standalone (no repo):  put pii_secrets.py next to this file, then `pytest -q`
-                           (minimal stand-ins for aicl.models / register_control are
-                           installed automatically when the real `aicl` package is missing).
+Run: pytest tests/test_pii_secrets.py -q
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import importlib.util
-import pathlib
-import sys
 import time
-import types
 
 import pytest
 
-try:
-    from aicl.controls.pii_secrets import PiiInput, PiiOutput, SecretsInput, SecretsOutput
-    from aicl.models import Action, Origin, RequestContext, Segment, Stage
-except ImportError:  # standalone mode: build stand-ins following ARCHITECTURE.md section 4
-    from enum import Enum
-
-    from pydantic import BaseModel
-
-    class Stage(str, Enum):
-        ingress = "ingress"; input = "input"; tool_call = "tool_call"
-        tool_result = "tool_result"; output = "output"; artifact = "artifact"
-
-    class Action(str, Enum):
-        block = "block"; require_approval = "require_approval"
-        redact = "redact"; flag = "flag"; allow = "allow"
-
-    class Origin(str, Enum):
-        system = "system"; user = "user"; assistant = "assistant"
-        tool_result = "tool_result"; retrieved = "retrieved"; artifact = "artifact"
-
-    class Segment(BaseModel):
-        idx: int; text: str; norm: str; decoded: list[str] = []
-        origin: Origin; trust: str = "trusted"; meta: dict = {}
-
-    class RequestContext(BaseModel):
-        request_id: str; session_id: str; endpoint: str; stage: Stage
-        identity: str | None; role: str | None; profile: str; model: str | None
-        segments: list[Segment]; tool: str | None = None; tool_args: dict | None = None
-        artifact: bytes | None = None; risk: float = 0.0; tainted: bool = False
-        policy_version: str
-
-    class Match(BaseModel):
-        kind: str; segment_idx: int | None = None; start: int | None = None
-        end: int | None = None; masked: str | None = None; in_decoded: bool = False
-
-    class Decision(BaseModel):
-        control_id: str; threat_ids: list[str]; action: Action; severity: str = "low"
-        score: float | None = None; reason: str = ""; matches: list[Match] = []
-        risk: float | None = None; taints_session: bool = False
-        latency_ms: float = 0.0; skipped: bool = False; shadow_suppressed: bool = False
-
-    models = types.ModuleType("aicl.models")
-    for _n in ("Stage", "Action", "Origin", "Segment", "RequestContext", "Match", "Decision"):
-        setattr(models, _n, globals()[_n])
-    registry = types.ModuleType("aicl.registry"); registry.register_control = lambda c: c
-    pkg = types.ModuleType("aicl"); pkg.models = models; pkg.registry = registry
-    sys.modules.update({"aicl": pkg, "aicl.models": models, "aicl.registry": registry})
-    _path = pathlib.Path(__file__).with_name("pii_secrets.py")
-    _spec = importlib.util.spec_from_file_location("pii_secrets", _path)
-    _mod = importlib.util.module_from_spec(_spec)
-    sys.modules["pii_secrets"] = _mod  # dataclasses need the module registered before exec
-    _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-    PiiInput, PiiOutput, SecretsInput, SecretsOutput = (
-        _mod.PiiInput, _mod.PiiOutput, _mod.SecretsInput, _mod.SecretsOutput)
+from aicl.controls.pii_secrets import PiiInput, PiiOutput, SecretsInput, SecretsOutput
+from aicl.models import Action, Origin, RequestContext, Segment, Stage
 
 # ----------------------------- helpers -------------------------------------- #
 PESEL = "44051401458"                      # synthetic, valid checksum
@@ -199,6 +140,18 @@ def test_decoded_only_secret_has_no_span_and_is_flagged():
 def test_secret_in_text_and_decoded_reported_once():
     d = run(SecretsInput, AWS, stage=Stage.input, origin=Origin.user, decoded=[AWS])
     assert len(d.matches) == 1 and not d.matches[0].in_decoded
+
+
+def test_plain_secret_does_not_hide_different_encoded_secret_of_same_kind():
+    other = "AKIA" + "B7Q2M4XK9P3L8W1Q"  # second, different key; split so scanners don't flag the repo
+    d = run(SecretsInput, f"{AWS} and more", stage=Stage.input, origin=Origin.user, decoded=[other])
+    assert [m.in_decoded for m in d.matches] == [False, True]
+
+
+def test_threat_ids_come_from_policy_cfg():
+    d = run(SecretsOutput, f"key {AWS}", cfg_extra={"threat_ids": ["TH-99"]})
+    assert d.threat_ids == ["TH-99"]
+    assert run(SecretsOutput, f"key {AWS}").threat_ids == ["TH-04"]  # fallback without policy
 
 
 def test_pii_does_not_scan_decoded_view():

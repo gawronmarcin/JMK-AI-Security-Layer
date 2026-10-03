@@ -52,5 +52,21 @@ def test_rejects_non_controls_and_duplicates():
         registry.unregister("C-TEST-DUP")
 
 
-def test_discover_imports_controls_package():
-    registry.discover()  # empty package for now; must not fail
+def test_every_control_class_in_package_is_registered():
+    """Catches controls decorated with something other than the real register_control."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import aicl.controls
+
+    registry.discover()
+    found = []
+    for mod in pkgutil.walk_packages(aicl.controls.__path__, prefix="aicl.controls."):
+        module = importlib.import_module(mod.name)
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            cid = getattr(cls, "id", None)
+            if cls.__module__ == mod.name and isinstance(cid, str) and hasattr(cls, "evaluate"):
+                found.append(cid)
+                assert isinstance(registry.get_control(cid), cls), f"{cls.__name__} ({cid}) is not registered"
+    assert found, "no controls found in aicl.controls"

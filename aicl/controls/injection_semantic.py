@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
-from aicl.controls import register_control  # ASSUMPTION: R1 exposes the decorator here (section 4.1)
-from aicl.models import Action, Decision, Match, Origin, RequestContext, Segment, Stage
+from aicl.models import Action, Decision, Match, Origin, RequestContext, Segment, Severity, Stage
+from aicl.registry import register_control
 from aicl.semantic.ollama import Judge, JudgeError, Verdict
 from aicl.semantic.settings import SemanticSettings
 
@@ -76,7 +77,7 @@ def scrub(text: str, limit: int = 200) -> str:
     return _SCRUB.sub("[...]", " ".join(text.split())[:limit])
 
 
-def _severity(score: float) -> str:
+def _severity(score: float) -> Severity:
     return "critical" if score >= 0.95 else "high" if score >= 0.85 else "medium" if score >= 0.65 else "low"
 
 
@@ -134,7 +135,7 @@ class InjectionSemantic:
         hit = best.score >= threshold
         return Decision(
             control_id=self.id,
-            threat_ids=["TH-01", "TH-02"],
+            threat_ids=list(_cfg(cfg, "threat_ids", ["TH-01", "TH-02"])),
             action=action if hit else Action.allow,
             severity=_severity(best.score) if hit else "low",
             score=best.score,
