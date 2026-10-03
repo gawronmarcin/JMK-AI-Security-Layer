@@ -148,7 +148,7 @@ controls:
     on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | bastion (in-process SDK) | remote (HTTP /protect)
+      backend: none                     # none (skipped) | embedding (vector similarity) | bastion (SDK) | remote (HTTP /protect)
       url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8080 (Bastion Docker image)
       model: ""                         # bastion: HF repo id, empty = free English model
       timeout_ms: 300
