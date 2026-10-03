@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from tests.core.test_gateway import serve
@@ -108,5 +111,9 @@ async def test_export_audit(gw, admin_headers):
 
 
 async def test_latest_report(gw, admin_headers):
+    report_file = Path("reports/test_report.json")
+    if not report_file.exists():
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps({"totals": {"cases": 1, "passed": 1}}), encoding="utf-8")
     r = await gw.client.get("/admin/reports/latest", headers=admin_headers)
     assert r.status_code == 200

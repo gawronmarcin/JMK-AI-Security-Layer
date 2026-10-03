@@ -19,10 +19,14 @@ from aicl.models import (
     ErrorType,
     Latency,
     Match,
+    Origin,
     Profile,
+    Segment,
+    Trust,
     Usage,
     strongest_action,
 )
+from aicl.normalize import build_segment
 from aicl.policy.schema import CompiledPolicy, IdentitySpec
 from aicl.runtime import Runtime
 from aicl.utils import new_id
@@ -294,3 +298,63 @@ async def account_usage(rt: Runtime, rec: RequestRecord) -> None:
     if window != "minute":
         # max_requests_per_minute is checked against the minute window, whatever the budget window.
         await rt.state.add_usage(rec.identity.id, "minute", requests=1)
+
+
+def extract_tool_arg_segments(
+    tool_args: Any,
+    origin: Origin,
+    base_idx: int = 0,
+    trust: Trust = "trusted",
+    tool_name: str | None = None,
+) -> list[Segment]:
+    """Turn string values inside tool arguments into Segments for inspection."""
+    extracted: list[tuple[list[Any], str]] = []
+
+    def _walk(val: Any, path: list[Any]) -> None:
+        if isinstance(val, str):
+            if val.strip():
+                extracted.append((path, val))
+        elif isinstance(val, dict):
+            for k, v in val.items():
+                _walk(v, path + [k])
+        elif isinstance(val, (list, tuple)):
+            for i, v in enumerate(val):
+                _walk(v, path + [i])
+
+    _walk(tool_args, [])
+    segments: list[Segment] = []
+    for i, (path, text) in enumerate(extracted):
+        meta: dict[str, Any] = {"arg_path": path}
+        if tool_name:
+            meta["tool"] = tool_name
+        segments.append(build_segment(base_idx + i, text, origin, trust, meta))
+    return segments
+
+
+def apply_redacted_args(tool_args: Any, segments: list[Segment]) -> Any:
+    """Apply redacted text back into tool_args structure based on meta['arg_path']."""
+    import copy
+
+    updated = copy.deepcopy(tool_args)
+    for seg in segments:
+        path = seg.meta.get("arg_path")
+        if path is not None and isinstance(path, list):
+            curr = updated
+            for p in path[:-1]:
+                if isinstance(curr, dict) and p in curr:
+                    curr = curr[p]
+                elif isinstance(curr, list) and isinstance(p, int) and 0 <= p < len(curr):
+                    curr = curr[p]
+                else:
+                    break
+            else:
+                if path:
+                    last_p = path[-1]
+                    if isinstance(curr, dict) and last_p in curr:
+                        curr[last_p] = seg.text
+                    elif isinstance(curr, list) and isinstance(last_p, int) and 0 <= last_p < len(curr):
+                        curr[last_p] = seg.text
+                elif isinstance(updated, str):
+                    updated = seg.text
+    return updated
+

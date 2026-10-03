@@ -284,6 +284,39 @@ async def test_proposed_tool_calls_run_tool_call_stage(tmp_path):
     assert seen == [("search_docs", {"query": "refunds"}), ("run_shell", {"cmd": "rm -rf /"})]
 
 
+async def test_proposed_tool_call_with_secret_is_redacted_in_balanced(gw):
+    # Model proposes a tool call containing an AWS secret in arguments
+    r = await gw.chat("x", scenario='call_tool:search_docs:{"query": "my key is AKIA1234567890123456"}')
+    assert r.status_code == 200
+    assert r.headers["X-AICL-Action"] == "redact"
+    args_json = r.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert "AKIA" not in args_json
+    assert "[REDACTED:aws_access_key]" in args_json
+
+
+async def test_proposed_tool_call_with_secret_is_blocked_in_strict(tmp_path):
+    # In strict profile, model proposing a secret in tool call is blocked
+    overlay = {
+        "identities": [
+            {
+                "id": "support-agent-01",
+                "api_key_env": "AICL_KEY_SUPPORT",
+                "role": "support_agent",
+                "profile": "strict",
+            }
+        ]
+    }
+    async with serve(tmp_path, policy_overlay=overlay) as g:
+        r = await g.chat(
+            "x",
+            scenario='call_tool:search_docs:{"query": "my key is AKIA1234567890123456"}',
+        )
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["type"] == "aicl_blocked"
+    assert err["control_id"] == "C-SECRET-OUT"
+
+
 # --- accounting and startup events -----------------------------------------------------------------
 
 

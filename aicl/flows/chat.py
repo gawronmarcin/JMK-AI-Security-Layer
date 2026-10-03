@@ -21,7 +21,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aicl.engine import run_stage
 from aicl.errors import GatewayError
-from aicl.flows.common import BodyReader, FlowResponse, RequestRecord, account_usage, stop_if_blocked
+from aicl.flows.common import (
+    BodyReader,
+    FlowResponse,
+    RequestRecord,
+    account_usage,
+    apply_redacted_args,
+    extract_tool_arg_segments,
+    stop_if_blocked,
+)
 from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
 from aicl.policy.schema import ModelSpec
@@ -214,13 +222,35 @@ async def _run(
         for seg in result.segments:
             choices[seg.idx - base].setdefault("message", {})["content"] = seg.text
 
-    for _, (tool, args) in proposed:
-        call_ctx = ctx.model_copy(update={"segments": [], "tool": tool, "tool_args": args})
+    for choice_idx, (tool, args) in proposed:
+        arg_segments = extract_tool_arg_segments(
+            args, origin=Origin.assistant, base_idx=len(out_segments), tool_name=tool
+        )
+        if arg_segments:
+            # Check proposed tool call arguments for output leaks (secrets/PII)
+            out_arg_ctx = ctx.model_copy(update={"stage": Stage.output, "segments": arg_segments})
+            out_arg_res = rec.add_stage(await run_stage(policy, out_arg_ctx, Stage.output, rt.controls))
+            stop_if_blocked(out_arg_res)
+            if out_arg_res.action == Action.redact:
+                args = apply_redacted_args(args, out_arg_res.segments)
+                _update_choice_tool_call_args(choices[choice_idx], tool, args)
+
+        call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool": tool, "tool_args": args})
         stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)))
 
     final = rec.final_action()
     rec.emit(final)
     return FlowResponse(status=200, body=body, headers=rec.response_headers(final), stream=req.stream)
+
+
+def _update_choice_tool_call_args(choice: dict[str, Any], tool: str, redacted_args: Any) -> None:
+    msg = choice.get("message")
+    if not isinstance(msg, dict):
+        return
+    for call in msg.get("tool_calls") or []:
+        fn = call.get("function")
+        if isinstance(fn, dict) and fn.get("name") == tool:
+            fn["arguments"] = json.dumps(redacted_args, ensure_ascii=False)
 
 
 _account = account_usage

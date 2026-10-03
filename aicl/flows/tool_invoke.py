@@ -27,6 +27,8 @@ from aicl.flows.common import (
     RequestRecord,
     account_usage,
     auth_decision,
+    extract_tool_arg_segments,
+    apply_redacted_args,
     stop_if_blocked,
 )
 from aicl.models import Action, ErrorType, Origin, RequestContext, Stage, Trust, Usage
@@ -112,8 +114,17 @@ async def _run(
     # 1. Ingress stage (auth is done, C-BUDGET rate/token check, C-SIZE check)
     stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)))
 
-    # 2. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT)
-    call_ctx = ctx.model_copy(update={"stage": Stage.tool_call})
+    # 2. Input stage (scan arguments for C-SECRET-IN, C-PII-IN, C-INJ-PAT, C-INJ-SEM)
+    arg_segments = extract_tool_arg_segments(args, origin=Origin.user, tool_name=req.tool)
+    if arg_segments:
+        input_ctx = ctx.model_copy(update={"stage": Stage.input, "segments": arg_segments})
+        input_result = rec.add_stage(await run_stage(policy, input_ctx, Stage.input, rt.controls))
+        stop_if_blocked(input_result)
+        if input_result.action == Action.redact:
+            args = apply_redacted_args(args, input_result.segments)
+
+    # 3. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT, C-CANARY, C-CODE-EXEC, C-MEM-ACL)
+    call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool_args": args})
     stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)))
 
     # Verify tool exists in policy definition
