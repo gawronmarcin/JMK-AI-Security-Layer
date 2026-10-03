@@ -471,3 +471,33 @@ async def test_admin_policy_validate_and_reload(gw):
             401,
             403,
         )
+
+
+async def test_v1_chat_alias_works(gw):
+    r = await gw.client.post(
+        "/v1/chat",
+        headers={"Authorization": "Bearer k-support"},
+        json={
+            "model": "mock-commercial",
+            "messages": [{"role": "user", "content": "ping via /v1/chat"}],
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["X-AICL-Action"] == "allow"
+    assert "choices" in r.json()
+
+
+async def test_admin_can_test_as_identity_in_playground(gw):
+    # Admin testing as support-agent-01 via X-AICL-Agent succeeds
+    r = await gw.client.post(
+        "/v1/chat",
+        headers={"Authorization": "Bearer k-admin", "X-AICL-Agent": "support-agent-01"},
+        json={
+            "model": "mock-commercial",
+            "messages": [{"role": "user", "content": "hello from playground"}],
+        },
+    )
+    assert r.status_code == 200
+    event = await gw.request_event(r)
+    assert event.identity == "support-agent-01"
+    assert event.role == "support_agent"

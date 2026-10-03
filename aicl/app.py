@@ -134,6 +134,7 @@ def create_app(
     app.mount("/dashboard", _RevalidatedStaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 
     @app.post("/v1/chat/completions")
+    @app.post("/v1/chat")
     async def chat_completions(request: Request) -> Response:
         flow = await handle_chat(rt, _body_reader(request), _headers(request))
         return _respond(flow)

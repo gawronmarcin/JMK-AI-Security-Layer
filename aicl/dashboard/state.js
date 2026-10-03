@@ -2,7 +2,7 @@
 // The admin key is deliberately NOT part of this state (see auth.js), so nothing here can
 // ever leak it into the URL or a copied view.
 
-export const VIEWS = ['overview', 'threats', 'controls', 'budgets', 'performance', 'tests', 'events', 'policy'];
+export const VIEWS = ['overview', 'playground', 'threats', 'controls', 'budgets', 'performance', 'tests', 'events', 'policy'];
 
 export const EVENT_FILTER_KEYS = ['action', 'type', 'severity', 'identity', 'endpoint', 'control', 'threat', 'policyVersion', 'q'];
 const HASH_KEYS = ['range', 'from', 'to', ...EVENT_FILTER_KEYS];

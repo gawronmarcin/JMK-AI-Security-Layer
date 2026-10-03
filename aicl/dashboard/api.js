@@ -60,7 +60,7 @@ function errorMessageFrom(body) {
 export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = () => {} } = {}) {
   const inflight = new Map(); // key -> AbortController
 
-  async function request(key, path, { method = 'GET', query = null, body = null, contentType = null, accept = 'application/json', raw = false, timeout = timeoutMs, auth: useAuth = true } = {}) {
+  async function request(key, path, { method = 'GET', query = null, body = null, contentType = null, customHeaders = null, accept = 'application/json', raw = false, meta = false, timeout = timeoutMs, auth: useAuth = true } = {}) {
     const prev = inflight.get(key);
     if (prev) prev.abort('superseded');
     const ctrl = new AbortController();
@@ -75,7 +75,7 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
       const s = qs.toString();
       if (s) url += (url.includes('?') ? '&' : '?') + s;
     }
-    const headers = { Accept: accept, ...(useAuth ? auth.headers() : {}) };
+    const headers = { Accept: accept, ...(useAuth ? auth.headers() : {}), ...(customHeaders || {}) };
     if (contentType) headers['Content-Type'] = contentType;
 
     try {
@@ -96,6 +96,10 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
         const backendMsg = errorMessageFrom(parsed);
         const msg = auth.redact(`${HUMAN[kind]}${backendMsg && kind !== 'unauthorized' ? ` ${String(backendMsg).slice(0, 300)}` : ''} [HTTP ${res.status}]`);
         const err = new ApiError(kind, msg, { status: res.status, endpoint: path, retryAfterMs: parseRetryAfter(res.headers.get('Retry-After')), details: parsed });
+        err.headers = res.headers;
+        err.requestId = res.headers.get('x-aicl-request-id');
+        err.action = res.headers.get('x-aicl-action');
+        err.overheadMs = res.headers.get('x-aicl-overhead-ms');
         if (kind === 'unauthorized' && useAuth) onUnauthorized(err);
         throw err;
       }
@@ -103,13 +107,28 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
       if (raw) return { blob: await res.blob(), headers: res.headers };
       if (res.status === 204) return null;
       const text = await res.text();
-      if (!text.trim()) return null;
-      try {
-        return JSON.parse(text);
-      } catch {
-        if (accept.includes('json')) throw new ApiError('parse', HUMAN.parse, { status: res.status, endpoint: path });
-        return text;
+      let parsed = null;
+      if (text.trim()) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          if (accept.includes('json')) throw new ApiError('parse', HUMAN.parse, { status: res.status, endpoint: path });
+          parsed = text;
+        }
       }
+
+      if (meta) {
+        return {
+          status: res.status,
+          headers: res.headers,
+          data: parsed,
+          requestId: res.headers.get('x-aicl-request-id'),
+          action: res.headers.get('x-aicl-action'),
+          overheadMs: res.headers.get('x-aicl-overhead-ms'),
+          policyVersion: res.headers.get('x-aicl-policy-version'),
+        };
+      }
+      return parsed;
     } finally {
       clearTimeout(timer);
       if (inflight.get(key) === ctrl) inflight.delete(key);
@@ -135,6 +154,22 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
       request('policy.validate', '/admin/policy/validate', { method: 'POST', body: yamlText, contentType: 'application/yaml', timeout: 20000 }),
     reloadPolicy: () => request('policy.reload', '/admin/policy/reload', { method: 'POST', timeout: 20000 }),
     exportAudit: () => request('export', '/admin/export/audit.jsonl', { raw: true, accept: 'application/x-ndjson, application/jsonl, text/plain, */*', timeout: 120000 }),
+    chat: ({ model, prompt, identity = null, timeout = 30000 } = {}) => {
+      const customHeaders = {};
+      if (identity) customHeaders['X-AICL-Agent'] = identity;
+      const body = JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      return request('playground.chat', '/v1/chat', {
+        method: 'POST',
+        body,
+        contentType: 'application/json',
+        customHeaders,
+        meta: true,
+        timeout,
+      });
+    },
     /** Optional static/API reports (test suite, fuzzer). 404 is reported as `not_found`, not as an outage. */
     report: (key, path) => request(`report:${key}`, path),
   };

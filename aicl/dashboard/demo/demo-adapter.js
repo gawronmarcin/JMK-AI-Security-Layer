@@ -97,5 +97,22 @@ export function createDemoAdapter({ base = './demo/' } = {}) {
       const lines = events.map((e) => rebase(e, delta)).filter((e) => Date.parse(e.ts) <= now).map((e) => JSON.stringify(e));
       return { blob: new Blob([`${lines.join('\n')}\n`], { type: 'application/x-ndjson' }) };
     },
+    async chat({ model, prompt, identity } = {}) {
+      const isInj = /ignore|override|zignoruj/i.test(prompt);
+      if (isInj) {
+        const err = new ApiError('forbidden', 'Request blocked by demo security layer (C-INJ-PAT)', { status: 403, details: { error: { type: 'aicl_blocked', message: 'blocked by C-INJ-PAT: matched pattern', control_id: 'C-INJ-PAT', threat_ids: ['TH-01'] } } });
+        err.action = 'block';
+        err.overheadMs = '0.45';
+        err.requestId = 'req_demo_' + Math.random().toString(36).slice(2, 8);
+        throw err;
+      }
+      return {
+        status: 200,
+        action: 'allow',
+        overheadMs: '0.35',
+        requestId: 'req_demo_' + Math.random().toString(36).slice(2, 8),
+        data: { choices: [{ message: { content: `[DEMO RESPONSE] Answered by ${model || 'mock-commercial'} for ${identity || 'support-agent-01'}.` } }] },
+      };
+    },
   };
 }

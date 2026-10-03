@@ -13,6 +13,7 @@ import { createControls } from './views/controls.js';
 import { createEvents, eventDetails } from './views/events.js';
 import { createOverview } from './views/overview.js';
 import { createPerformance } from './views/performance.js';
+import { createPlayground } from './views/playground.js';
 import { createPolicy } from './views/policy.js';
 import { createTests } from './views/tests.js';
 import { createThreats } from './views/threats.js';
@@ -101,7 +102,7 @@ function main() {
     exportAudit,
   };
 
-  for (const make of [createOverview, createThreats, createControls, createBudgets, createPerformance, createTests, createEvents, createPolicy]) {
+  for (const make of [createOverview, createPlayground, createThreats, createControls, createBudgets, createPerformance, createTests, createEvents, createPolicy]) {
     const v = make(ctx);
     v.root.hidden = true;
     views[v.id] = v;
