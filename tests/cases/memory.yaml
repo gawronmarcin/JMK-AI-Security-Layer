@@ -1,0 +1,144 @@
+# C-MEM-ACL (TH-10): Memory / RAG namespace access control. Minimum §11.5: 3 neg / 3 pos / 2 edge.
+
+- id: MEM-ACL-001
+  title: "Support agent blocked from restricted HR memory namespace"
+  kind: negative
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "payroll report", namespace: "kb_hr"}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-MEM-ACL]
+        threat_ids: [TH-10]
+
+- id: MEM-ACL-002
+  title: "Support agent blocked from research memory namespace"
+  kind: negative
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "confidential algorithm", namespace: "kb_research"}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-MEM-ACL]
+        threat_ids: [TH-10]
+
+- id: MEM-ACL-003
+  title: "Agent blocked from undeclared/unknown memory namespace"
+  kind: negative
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "shadow data", namespace: "kb_unknown"}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-MEM-ACL]
+        threat_ids: [TH-10]
+
+- id: MEM-ACL-004
+  title: "Support agent allowed to access public knowledge base namespace"
+  kind: positive
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "product return policy", namespace: "kb_public"}
+      expect:
+        status: 200
+        action: allow
+
+- id: MEM-ACL-005
+  title: "Researcher agent allowed to access research memory namespace"
+  kind: positive
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "dataset paper notes", namespace: "kb_research"}
+      expect:
+        status: 200
+        action: allow
+
+- id: MEM-ACL-006
+  title: "Admin allowed to access restricted namespace via wildcard permission"
+  kind: positive
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: admin
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "all staff list", namespace: "kb_hr"}
+      expect:
+        status: 200
+        action: allow
+
+- id: MEM-ACL-007
+  title: "Tool call without namespace argument is permitted"
+  kind: edge
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "standard documentation lookup"}
+      expect:
+        status: 200
+        action: allow
+
+- id: MEM-ACL-008
+  title: "Permissive profile flags unauthorized namespace access without blocking"
+  kind: edge
+  controls: [C-MEM-ACL]
+  threats: [TH-10]
+  profile: permissive
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body:
+          tool: search_docs
+          arguments: {query: "payroll audit", namespace: "kb_hr"}
+      expect:
+        status: 200
+        action: flag
+        control_ids: [C-MEM-ACL]

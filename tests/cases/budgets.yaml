@@ -1,7 +1,58 @@
-# C-BUDGET test cases (R3)
-# Format: ARCHITECTURE.md section 11.3.
+# C-BUDGET test cases (R3). Minimum §11.5: 3 neg / 3 pos / 2 edge.
 
-- id: BUDGET-003
+- id: BGT-001
+  title: "Token overuse blocks request at ingress"
+  kind: negative
+  controls: [C-BUDGET]
+  threats: [TH-11]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    budgets:
+      support_default: {max_tokens: 50}
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-tok1, X-Mock-Scenario: "tokens:60:0"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "first message consumes tokens"}]}
+      expect: {status: 200, action: allow}
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-tok1, X-Mock-Scenario: echo}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "second message blocked"}]}
+      expect:
+        status: 429
+        action: block
+        control_ids: [C-BUDGET]
+        threat_ids: [TH-11]
+
+- id: BGT-002
+  title: "Cost budget exceeded blocks subsequent requests"
+  kind: negative
+  controls: [C-BUDGET]
+  threats: [TH-12]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    budgets:
+      support_default: {max_cost_usd: 0.0001}
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-cost, X-Mock-Scenario: "tokens:1000:1000"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "expensive prompt"}]}
+      expect: {status: 200, action: allow}
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-cost, X-Mock-Scenario: echo}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "blocked"}]}
+      expect:
+        status: 429
+        action: block
+        control_ids: [C-BUDGET]
+        threat_ids: [TH-12]
+
+- id: BGT-003
   title: "Request within normal token and cost limits passes"
   kind: positive
   controls: [C-BUDGET]
@@ -17,16 +68,18 @@
         status: 200
         action: allow
 
-- id: BUDGET-004
+- id: BGT-004
   title: "Rate limit (RPM) exceeded blocks subsequent requests"
   kind: negative
   controls: [C-BUDGET]
   threats: [TH-12]
   profile: balanced
   identity: support-agent-01
+  policy_overlay:
+    budgets:
+      support_default: {max_requests_per_minute: 2}
   steps:
-    # 30 requests in 1 minute allowed for support_default
-    - repeat: 30
+    - repeat: 2
       request:
         endpoint: chat
         headers: {X-AICL-Session: s-bgt-rpm, X-Mock-Scenario: echo}
@@ -34,7 +87,6 @@
       expect:
         status: 200
         action: allow
-    # 31st request triggers rate limit block at ingress (§5.3: budget exceeded = 429)
     - request:
         endpoint: chat
         headers: {X-AICL-Session: s-bgt-rpm, X-Mock-Scenario: echo}
@@ -45,3 +97,65 @@
         control_ids: [C-BUDGET]
         threat_ids: [TH-12]
         upstream_called: false
+
+- id: BGT-005
+  title: "Tool invoke request within compute limits passes"
+  kind: positive
+  controls: [C-BUDGET]
+  threats: [TH-12]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "test query"}}
+      expect:
+        status: 200
+        action: allow
+
+- id: BGT-006
+  title: "Admin with unlimited budget passes"
+  kind: positive
+  controls: [C-BUDGET]
+  threats: [TH-11, TH-12]
+  profile: balanced
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "admin request"}]}
+      expect:
+        status: 200
+        action: allow
+
+- id: BGT-007
+  title: "Consecutive requests under RPM threshold succeed"
+  kind: edge
+  controls: [C-BUDGET]
+  threats: [TH-12]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - repeat: 5
+      request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-edge}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "moderate traffic"}]}
+      expect:
+        status: 200
+        action: allow
+
+- id: BGT-008
+  title: "Researcher identity with separate budget limit passes"
+  kind: edge
+  controls: [C-BUDGET]
+  threats: [TH-11]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: ollama-local, messages: [{"role": "user", "content": "research request"}]}
+      expect:
+        status: 200
+        action: allow

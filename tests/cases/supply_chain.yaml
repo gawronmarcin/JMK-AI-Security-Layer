@@ -1,0 +1,107 @@
+# C-SUPPLY (TH-16): Supply chain compromise guard. Minimum §11.5: 3 neg / 3 pos / 2 edge.
+- id: SUPPLY-001
+  title: Banned typosquatted package torch-triton-nightly in tool args is blocked
+  kind: negative
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "pip install torch-triton-nightly"}}
+      expect: {status: 403, action: block, control_ids: [C-SUPPLY], threat_ids: [TH-16]}
+
+- id: SUPPLY-002
+  title: Malicious package colourama in tool args is blocked
+  kind: negative
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "dependency: colourama"}}
+      expect: {status: 403, action: block, control_ids: [C-SUPPLY], threat_ids: [TH-16]}
+
+- id: SUPPLY-003
+  title: Compromised model repository evil-org/backdoored-llm is blocked
+  kind: negative
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: admin
+  policy_overlay:
+    controls:
+      model_allowlist: {enabled: false}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: "evil-org/backdoored-llm", messages: [{role: user, content: "hi"}]}
+      expect: {status: 403, action: block, control_ids: [C-SUPPLY], threat_ids: [TH-16]}
+
+- id: SUPPLY-004
+  title: Legitimate package pytorch reference passes supply chain check
+  kind: positive
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "install pytorch and torchvision"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SUPPLY-005
+  title: Legitimate model mock-commercial passes supply chain check
+  kind: positive
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "summarise documentation"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SUPPLY-006
+  title: Safe URL fetch passes supply chain check
+  kind: positive
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: fetch_url, arguments: {url: "https://pypi.org/project/requests/"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SUPPLY-007
+  title: Permissive profile flags supply chain violation instead of blocking
+  kind: edge
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: permissive
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "install torch-triton-nightly package"}}
+      expect: {status: 200, action: flag, upstream_called: true}
+
+- id: SUPPLY-008
+  title: Typosquatted requests library reqeusts in query is blocked
+  kind: edge
+  controls: [C-SUPPLY]
+  threats: [TH-16]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "download reqeusts"}}
+      expect: {status: 403, action: block, control_ids: [C-SUPPLY], threat_ids: [TH-16]}

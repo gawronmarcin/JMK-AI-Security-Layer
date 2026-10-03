@@ -37,6 +37,73 @@
         body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
       expect: {status: 200, upstream_called: true}
 
+- id: AUTH-004
+  title: Impersonation attempt via mismatching X-AICL-Agent header is rejected
+  kind: negative
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Agent: admin}
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 401, upstream_called: false}
+
+- id: AUTH-005
+  title: Admin key passes authentication
+  kind: positive
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200, upstream_called: true}
+
+- id: AUTH-006
+  title: Researcher key passes authentication
+  kind: positive
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: ollama-local, messages: [{role: user, content: "hi"}]}
+      expect: {status: 200, upstream_called: true}
+
+- id: AUTH-007
+  title: Valid key on second request in session passes
+  kind: edge
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-auth-edge}
+        body: {model: mock-commercial, messages: [{role: user, content: "msg1"}]}
+      expect: {status: 200, upstream_called: true}
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-auth-edge}
+        body: {model: mock-commercial, messages: [{role: user, content: "msg2"}]}
+      expect: {status: 200, upstream_called: true}
+
+- id: AUTH-008
+  title: Tool invoke endpoint authenticates caller properly
+  kind: edge
+  controls: [C-AUTH]
+  threats: [TH-08]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "test"}}
+      expect: {status: 200, upstream_called: true}
+
 - id: MODEL-001
   title: Researcher may not use the commercial model
   kind: negative
@@ -74,6 +141,66 @@
         endpoint: chat
         body: {model: mock-commercial, messages: [{role: user, content: "hi"}]}
       expect: {status: 200, upstream_called: true}
+
+- id: MODEL-004
+  title: Disallowed commercial model for researcher is blocked
+  kind: negative
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "another test"}]}
+      expect: {status: 403, action: block, control_ids: [C-MODEL-ALLOW], upstream_called: false}
+
+- id: MODEL-005
+  title: Allowed commercial model for support agent passes
+  kind: positive
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "query"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: MODEL-006
+  title: Allowed local model for support agent passes
+  kind: positive
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: ollama-local, messages: [{role: user, content: "query"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: MODEL-007
+  title: Wildcard model access for admin role passes
+  kind: positive
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "admin prompt"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: MODEL-008
+  title: Admin calling local model passes
+  kind: edge
+  controls: [C-MODEL-ALLOW]
+  threats: [TH-06]
+  identity: admin
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: ollama-local, messages: [{role: user, content: "admin local"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
 
 - id: TOOL-001
   title: Support agent may not call run_shell

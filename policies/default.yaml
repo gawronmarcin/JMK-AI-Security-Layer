@@ -27,13 +27,13 @@ identities:
 roles:
   support_agent:
     models: [mock-commercial, ollama-local]
-    tools: [search_docs, send_email]
+    tools: [search_docs, send_email, delegate_task]
     memory_namespaces: [kb_public]
     budget: support_default
     may_delegate_to: [researcher]
   researcher:
     models: [ollama-local]
-    tools: [search_docs, fetch_url]
+    tools: [search_docs, fetch_url, delegate_task]
     memory_namespaces: [kb_public, kb_research]
     budget: research_default
   admin:
@@ -76,6 +76,11 @@ tools:
     backend_url_env: AICL_TOOL_SHELL_URL
     privilege: critical
     output_trust: untrusted
+  delegate_task:
+    backend_url_env: AICL_TOOL_DOCS_URL
+    privilege: medium
+    output_trust: trusted
+    arg_schema: {type: object, properties: {role: {type: string}, task: {type: string}, depth: {type: integer}}}
 
 # --- Budgets (null/omitted limit = no limit) -------------------------------------------------
 budgets:
@@ -302,6 +307,38 @@ controls:
       strict:     {action: block}
       balanced:   {action: block}
       permissive: {action: flag}
+
+  signature_feed:
+    id: C-SIG
+    threat_ids: [TH-17]
+    enabled: true
+    stages: [input, output, tool_call, tool_result]
+    levels:
+      strict:     {action: block, min_severity: low}
+      balanced:   {action: block, min_severity: medium}
+      permissive: {action: flag,  min_severity: high}
+
+  supply_chain:
+    id: C-SUPPLY
+    threat_ids: [TH-16]
+    enabled: true
+    stages: [ingress, artifact, tool_call]
+    levels:
+      strict:     {action: block}
+      balanced:   {action: block}
+      permissive: {action: flag}
+
+  delegation:
+    id: C-DELEG
+    threat_ids: [TH-09]
+    enabled: true
+    stages: [ingress, tool_call]
+    params: {max_delegation_depth: 2}
+    levels:
+      strict:     {action: block, max_delegation_depth: 1}
+      balanced:   {action: block, max_delegation_depth: 2}
+      permissive: {action: flag,  max_delegation_depth: 3}
+
 
 # --- Semantic judge (local Ollama) ---------------------------------------------------------
 semantic:

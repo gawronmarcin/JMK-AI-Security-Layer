@@ -1,0 +1,104 @@
+# C-DELEG (TH-09): Delegation and privilege escalation guard. Minimum §11.5: 3 neg / 3 pos / 2 edge.
+- id: DELEG-001
+  title: Delegation call exceeding max depth is blocked
+  kind: negative
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 5, role: support_agent, task: "process invoice"}}
+      expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09]}
+
+- id: DELEG-002
+  title: Privilege escalation from support_agent to admin is blocked
+  kind: negative
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: admin, task: "delete audit log"}}
+      expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09]}
+
+- id: DELEG-003
+  title: Privilege escalation from support_agent to researcher is blocked
+  kind: negative
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: researcher, task: "execute deep query"}}
+      expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09]}
+
+- id: DELEG-004
+  title: Safe delegation within depth limit and same role passes
+  kind: positive
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: support_agent, task: "format customer reply"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: DELEG-005
+  title: Standard non-delegation tool call passes delegation check
+  kind: positive
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "helpdesk manual"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: DELEG-006
+  title: Admin delegating to lower role passes delegation check
+  kind: positive
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: admin
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: support_agent, task: "summarise ticket"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: DELEG-007
+  title: Permissive profile flags depth limit violation instead of blocking
+  kind: edge
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: permissive
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 8, role: support_agent, task: "chain tasks"}}
+      expect: {status: 200, action: flag, upstream_called: true}
+
+- id: DELEG-008
+  title: Researcher delegating at allowed depth passes
+  kind: edge
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: researcher, task: "crawl docs"}}
+      expect: {status: 200, action: allow, upstream_called: true}

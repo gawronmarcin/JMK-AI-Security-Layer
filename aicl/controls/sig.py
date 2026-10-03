@@ -31,6 +31,9 @@ class SignatureFeedControl:
     async def evaluate(self, ctx: RequestContext, cfg: Any) -> Decision:
         target_action = Action(_cfg_val(cfg, "action", Action.block))
         threat_ids = list(_cfg_val(cfg, "threat_ids", ["TH-17"]))
+        min_severity_cfg = _cfg_val(cfg, "min_severity", "low")
+        severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+        min_severity_val = severity_map.get(min_severity_cfg, 1)
 
         snap = feeds.current()
         matches: list[Match] = []
@@ -49,6 +52,9 @@ class SignatureFeedControl:
         # Check all regex signatures loaded across all sets
         for sig in snap.signatures:
             if sig.kind == "regex":
+                sig_sev_val = severity_map.get(sig.severity, 1)
+                if sig_sev_val < min_severity_val:
+                    continue
                 pat = snap.regex(sig.id)
                 if pat is not None:
                     for seg_idx, text, in_dec in texts:

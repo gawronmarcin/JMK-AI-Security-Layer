@@ -222,3 +222,31 @@ signatures:
     description: "Authority claim used to justify an override (grey zone)"
     refs: ["OWASP LLM01:2025"]
     added: "2026-10-03"
+
+  - id: SIG-SUPPLY-001
+    set: supply_chain
+    kind: model_repo
+    pattern: "evil-org/backdoored-llm"
+    severity: critical
+    description: "Known compromised model repository"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-SUPPLY-002
+    set: supply_chain
+    kind: package
+    pattern: "torch-triton-nightly"
+    severity: critical
+    description: "Known malicious typosquat package (PyPI dependency confusion)"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-SUPPLY-003
+    set: supply_chain
+    kind: package
+    pattern: "reqeusts"
+    severity: high
+    description: "Typosquatted requests library"
+    refs: ["ATLAS: AI supply chain compromise"]
+    added: "2026-10-03"
+

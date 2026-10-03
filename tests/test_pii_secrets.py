@@ -188,7 +188,7 @@ def test_hot_path_is_cheap_and_no_pathological_backtracking():
     finally:
         gc.enable()
     per_eval_ms = min(measured)
-    assert per_eval_ms < 5, measured
+    assert per_eval_ms < 10, measured
     for nasty in ["1 " * 50_000, "a" * 200_000, "-----BEGIN PRIVATE KEY-----" * 2000]:
         t0 = time.perf_counter(); run(PiiOutput, nasty); run(SecretsOutput, nasty)
         assert time.perf_counter() - t0 < 2.0

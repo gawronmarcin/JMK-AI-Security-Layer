@@ -1,0 +1,143 @@
+# C-SIZE (TH-20): Request size limits guard. Minimum §11.5: 3 neg / 3 pos / 2 edge.
+- id: SIZE-001
+  title: Message content exceeding max_chars_per_message is blocked by C-SIZE
+  kind: negative
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    controls:
+      size_limits:
+        params: {max_chars_per_message: 50}
+        levels:
+          balanced: {action: block, max_chars_per_message: 50}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "This message exceeds the configured limit of fifty characters on purpose."}]}
+      expect: {status: 403, action: block, control_ids: [C-SIZE], threat_ids: [TH-20]}
+
+- id: SIZE-002
+  title: Request body exceeding max_body_bytes is rejected
+  kind: negative
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    controls:
+      size_limits:
+        levels:
+          balanced: {action: block, max_body_bytes: 80}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "Short content but entire body is longer than eighty bytes"}]}
+      expect: {status: 403, action: block, control_ids: [C-SIZE], threat_ids: [TH-20]}
+
+- id: SIZE-003
+  title: Message count exceeding max_messages is blocked
+  kind: negative
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    controls:
+      size_limits:
+        params: {max_messages: 2}
+        levels:
+          balanced: {action: block, max_messages: 2}
+  steps:
+    - request:
+        endpoint: chat
+        body:
+          model: mock-commercial
+          messages:
+            - {role: system, content: "sys"}
+            - {role: user, content: "u1"}
+            - {role: assistant, content: "a1"}
+      expect: {status: 403, action: block, control_ids: [C-SIZE], threat_ids: [TH-20]}
+
+- id: SIZE-004
+  title: Normal size message passes size check
+  kind: positive
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "Hello, support team."}]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SIZE-005
+  title: Normal size tool invocation passes size check
+  kind: positive
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: search_docs, arguments: {query: "returns"}}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SIZE-006
+  title: Multiturn message with moderate length passes size check
+  kind: positive
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        body:
+          model: mock-commercial
+          messages:
+            - {role: user, content: "Question 1"}
+            - {role: assistant, content: "Answer 1"}
+            - {role: user, content: "Follow-up question"}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: SIZE-007
+  title: Permissive profile flags oversized message instead of blocking
+  kind: edge
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: permissive
+  identity: support-agent-01
+  policy_overlay:
+    controls:
+      size_limits:
+        params: {max_chars_per_message: 40}
+        levels:
+          permissive: {action: flag, max_chars_per_message: 40}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "Exceeding permissive limit of forty characters"}]}
+      expect: {status: 200, action: flag, upstream_called: true}
+
+- id: SIZE-008
+  title: Shadow mode suppresses size limit block
+  kind: edge
+  controls: [C-SIZE]
+  threats: [TH-20]
+  profile: balanced
+  identity: support-agent-01
+  policy_overlay:
+    controls:
+      size_limits:
+        mode: shadow
+        levels:
+          balanced: {action: block, max_body_bytes: 80}
+  steps:
+    - request:
+        endpoint: chat
+        body: {model: mock-commercial, messages: [{role: user, content: "This is longer than eighty bytes in shadow mode"}]}
+      expect: {status: 200, action: allow, upstream_called: true}
