@@ -1,0 +1,49 @@
+# C-BUDGET test cases (R3)
+# Format: ARCHITECTURE.md section 11.3.
+
+- id: BUDGET-001
+  title: "Request within normal token and cost limits passes"
+  kind: positive
+  controls: [C-BUDGET]
+  threats: [TH-11, TH-12]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-001, X-Mock-Scenario: "tokens:100:50"}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "Short question"}]}
+      expect:
+        status: 200
+        action: allow
+        control_ids: [C-BUDGET]
+        threat_ids: [TH-11, TH-12]
+
+- id: BUDGET-002
+  title: "Rate limit (RPM) exceeded blocks subsequent requests"
+  kind: negative
+  controls: [C-BUDGET]
+  threats: [TH-12]
+  profile: balanced
+  identity: support-agent-01
+  steps:
+    # 30 requests in 1 minute allowed for support_default
+    - repeat: 30
+      request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-rpm, X-Mock-Scenario: echo}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "ping"}]}
+      expect:
+        status: 200
+        action: allow
+    # 31st request triggers rate limit block at ingress
+    - request:
+        endpoint: chat
+        headers: {X-AICL-Session: s-bgt-rpm, X-Mock-Scenario: echo}
+        body: {model: mock-commercial, messages: [{"role": "user", "content": "ping over limit"}]}
+      expect:
+        status: 403
+        action: block
+        control_ids: [C-BUDGET]
+        threat_ids: [TH-12]
+        upstream_called: false

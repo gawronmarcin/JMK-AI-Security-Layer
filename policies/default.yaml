@@ -52,7 +52,7 @@ models:
   - name: ollama-local
     provider: ollama
     base_url_env: AICL_OLLAMA_URL
-    upstream_model: "<TBD-small-model>"   # TEAM DECISION: pick after measuring latency
+    upstream_model: "llama3.2:3b"   # TEAM DECISION: pick after measuring latency
     local: true
     price_per_1k_tokens: {input: 0.0, output: 0.0}
 
@@ -258,11 +258,21 @@ controls:
       balanced:   {action: block}
       permissive: {action: flag}
 
+  taint:
+    id: C-TAINT
+    threat_ids: [TH-19]
+    enabled: true
+    stages: [tool_call]
+    levels:
+      strict:     {action: block}
+      balanced:   {action: block}
+      permissive: {action: block}
+
 # --- Semantic judge (local Ollama) ---------------------------------------------------------
 semantic:
   provider: ollama
   base_url_env: AICL_OLLAMA_URL
-  model: "<TBD-small-model>"
+  model: "llama3.2:3b"
   timeout_ms: 1500
   run_when:
     untrusted_segments: true            # always judge tool output / retrieved docs / uploads

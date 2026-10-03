@@ -64,6 +64,8 @@ def create_app(
     audit_file = Path(audit_path) if audit_path is not None else base / policy.raw.audit.path
     feeds.store.base_dir = base
 
+    from aicl.state import set_store
+
     rt = Runtime(
         policy=policy,
         env=env,
@@ -73,6 +75,7 @@ def create_app(
         feeds=feeds.store,
         controls=controls,
     )
+    set_store(rt.state)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
