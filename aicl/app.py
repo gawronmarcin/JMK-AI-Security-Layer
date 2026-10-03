@@ -23,10 +23,11 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from aicl import feeds, registry
 from aicl.admin import policy as admin_policy
+from aicl.admin import telemetry as admin_telemetry
 from aicl.audit import AuditWriter
 from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
@@ -103,14 +104,38 @@ def create_app(
     app.state.runtime = rt
 
     app.include_router(admin_policy.router(rt))
+    app.include_router(admin_telemetry.router(rt))
 
     @app.get("/healthz")
+    @app.get("/livez")
+    @app.get("/readyz")
     async def healthz() -> dict[str, Any]:
         return {
             "status": "ok",
             "policy_version": rt.policy.version,
             "feed_version": rt.feeds.current().version,
         }
+
+    dashboard_file = Path(__file__).resolve().parent / "dashboard" / "index.html"
+
+    @app.get("/dashboard")
+    @app.get("/dashboard/")
+    async def dashboard() -> Response:
+        if dashboard_file.exists():
+            return FileResponse(dashboard_file, media_type="text/html")
+        return JSONResponse({
+            "status": "dashboard_ready",
+            "admin_endpoints": [
+                "/admin/policy",
+                "/admin/controls",
+                "/admin/metrics/summary",
+                "/admin/metrics/latency",
+                "/admin/metrics/budgets",
+                "/admin/events",
+                "/admin/events/stream",
+                "/admin/export/audit.jsonl",
+            ],
+        })
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:

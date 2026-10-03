@@ -59,12 +59,19 @@ class AuditWriter:
         self._queue: asyncio.Queue[AuditEvent | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self._listeners: list[Listener] = []
+        self._recent: list[AuditEvent] = []
+
+    def recent_events(self) -> list[AuditEvent]:
+        return list(self._recent)
 
     def add_listener(self, fn: Listener) -> None:
         self._listeners.append(fn)
 
     def emit(self, event: AuditEvent) -> None:
         """Non-blocking; safe to call from request handlers."""
+        self._recent.append(event)
+        if len(self._recent) > 1000:
+            self._recent.pop(0)
         for fn in self._listeners:
             try:
                 fn(event)

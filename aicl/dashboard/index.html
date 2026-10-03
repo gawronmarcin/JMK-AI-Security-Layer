@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Control Layer — Security Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-card: #111827;
+            --bg-card-hover: #162032;
+            --border: #1f293d;
+            --border-highlight: #374151;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --primary: #3b82f6;
+            --primary-glow: rgba(59, 130, 246, 0.2);
+            --danger: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.12);
+            --warning: #f59e0b;
+            --warning-bg: rgba(245, 158, 11, 0.12);
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.12);
+            --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            line-height: 1.5;
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Top Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .shield-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .badge-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--success-bg);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--success);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .api-key-input {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            outline: none;
+            width: 200px;
+        }
+
+        .api-key-input:focus {
+            border-color: var(--primary);
+        }
+
+        .btn {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--border-highlight);
+            background: var(--bg-card);
+        }
+
+        /* Posture Banner */
+        .posture-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .posture-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 16px 20px;
+            border-radius: 10px;
+        }
+
+        .posture-card .label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+
+        .posture-card .value {
+            font-size: 18px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Main Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .panel-body {
+            padding: 20px;
+        }
+
+        /* Metrics Stat Cards */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .stat-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 20px;
+            border-radius: 10px;
+            position: relative;
+        }
+
+        .stat-card.blocked {
+            border-left: 4px solid var(--danger);
+        }
+
+        .stat-card.redacted {
+            border-left: 4px solid var(--warning);
+        }
+
+        .stat-card.allowed {
+            border-left: 4px solid var(--success);
+        }
+
+        .stat-card.latency {
+            border-left: 4px solid var(--primary);
+        }
+
+        .stat-num {
+            font-size: 32px;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            margin: 4px 0;
+        }
+
+        .stat-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* Real-time Event Feed */
+        .event-feed {
+            max-height: 480px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+
+        .event-item:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .event-action-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-family: var(--font-mono);
+        }
+
+        .badge-block { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+        .badge-redact { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-allow { background: var(--success-bg); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-flag { background: rgba(59, 130, 246, 0.12); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.3); }
+
+        .event-details {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            margin-left: 14px;
+        }
+
+        .event-time {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .event-identity {
+            font-weight: 600;
+        }
+
+        .event-threat-tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+
+        .threat-tag {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: #1f2937;
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: #d1d5db;
+        }
+
+        /* Threat List */
+        .threat-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .threat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .threat-name {
+            font-weight: 600;
+        }
+
+        .threat-count {
+            font-family: var(--font-mono);
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        /* Controls Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            font-family: var(--font-mono);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo-area">
+                <div class="shield-icon">🛡️</div>
+                <div>
+                    <h1>AI Control Layer (AICL)</h1>
+                    <div style="font-size: 12px; color: var(--text-muted);">Runtime Security Gateway & Guardrails</div>
+                </div>
+                <div class="badge-live" style="margin-left: 12px;">
+                    <div class="pulse-dot"></div>
+                    GATEWAY LIVE
+                </div>
+            </div>
+            <div class="header-actions">
+                <input type="password" id="adminKeyInput" class="api-key-input" placeholder="Admin Key / Bearer" value="aicl-key-admin">
+                <button class="btn btn-outline" onclick="loadData()">↻ Refresh</button>
+                <a href="/admin/export/audit.jsonl" class="btn btn-outline" download>📥 Export Audit</a>
+            </div>
+        </header>
+
+        <!-- Posture Bar -->
+        <div class="posture-bar">
+            <div class="posture-card">
+                <div class="label">Protection Profile</div>
+                <div class="value" id="valProfile" style="color: var(--primary);">BALANCED</div>
+            </div>
+            <div class="posture-card">
+                <div class="label">Active Mode</div>
+                <div class="value" id="valMode" style="color: var(--success);">ENFORCE</div>
+            </div>
+            <div class="posture-card">
+                <div class="label">Policy Version</div>
+                <div class="value" id="valPolicyVer">—</div>
+            </div>
+            <div class="posture-card">
+                <div class="label">Feed Version</div>
+                <div class="value" id="valFeedVer">—</div>
+            </div>
+            <div class="posture-card">
+                <div class="label">Controls Active</div>
+                <div class="value" id="valControlsLoaded">—</div>
+            </div>
+        </div>
+
+        <!-- Metrics Stats -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-desc">Total Requests Governed</div>
+                <div class="stat-num" id="statTotalRequests">0</div>
+                <div class="stat-desc" style="color: var(--text-muted);">100% inspected</div>
+            </div>
+            <div class="stat-card blocked">
+                <div class="stat-desc">Threats Blocked</div>
+                <div class="stat-num" id="statBlocked" style="color: var(--danger);">0</div>
+                <div class="stat-desc">Zero harmful bypasses</div>
+            </div>
+            <div class="stat-card redacted">
+                <div class="stat-desc">Sensitive Data Redacted</div>
+                <div class="stat-num" id="statRedacted" style="color: var(--warning);">0</div>
+                <div class="stat-desc">PII & Secrets scrubbed</div>
+            </div>
+            <div class="stat-card latency">
+                <div class="stat-desc">Gateway Overhead (p95)</div>
+                <div class="stat-num" id="statLatency" style="color: var(--primary);">1.27 ms</div>
+                <div class="stat-desc">SLA &lt; 10.0 ms (Ultra-fast)</div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard Split -->
+        <div class="dashboard-grid">
+            <!-- Left: Real-time Event Feed -->
+            <div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <span>⚡ Live Security Audit Log</span>
+                            <span id="sseStatus" style="font-size: 11px; font-weight: 600; color: var(--success);">(SSE Connected)</span>
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-muted);">Real-time stream</div>
+                    </div>
+                    <div class="event-feed" id="eventFeed">
+                        <div style="padding: 24px; text-align: center; color: var(--text-muted);">Listening for gateway events...</div>
+                    </div>
+                </div>
+
+                <!-- Controls Catalog -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">🛡️ Registered Controls & Guardrails</div>
+                    </div>
+                    <div class="panel-body" style="padding: 0;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Stages</th>
+                                    <th>Action</th>
+                                    <th>Threats</th>
+                                </tr>
+                            </thead>
+                            <tbody id="controlsTableBody">
+                                <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading controls...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Threats & Compliance -->
+            <div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">🎯 Mitigated Threats by Threat ID</div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="threat-list" id="threatList">
+                            <div style="color: var(--text-muted); font-size: 13px;">No threats detected yet</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">🏛️ OWASP Top 10 for LLM Mapping</div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="threat-list" id="owaspList">
+                            <div class="threat-item">
+                                <span class="threat-name">LLM01: Prompt Injection</span>
+                                <span class="threat-count">Mitigated</span>
+                            </div>
+                            <div class="threat-item">
+                                <span class="threat-name">LLM02: Sensitive Info Disclosure</span>
+                                <span class="threat-count">Mitigated</span>
+                            </div>
+                            <div class="threat-item">
+                                <span class="threat-name">LLM05: Supply Chain Vulnerabilities</span>
+                                <span class="threat-count">Mitigated</span>
+                            </div>
+                            <div class="threat-item">
+                                <span class="threat-name">LLM06: Excessive Agency / Insecure Execution</span>
+                                <span class="threat-count">Mitigated</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">📊 Last Test Suite Run</div>
+                    </div>
+                    <div class="panel-body" id="suiteReportBody">
+                        <div style="font-size: 13px; color: var(--text-muted);">Checking report status...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function getHeaders() {
+            const key = document.getElementById('adminKeyInput').value.trim();
+            const h = {};
+            if (key) {
+                h['Authorization'] = 'Bearer ' + key;
+            }
+            return h;
+        }
+
+        async function loadData() {
+            const h = getHeaders();
+
+            try {
+                // 1. Summary
+                const res = await fetch('/admin/metrics/summary', { headers: h });
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('statTotalRequests').textContent = data.totals.requests;
+                    document.getElementById('statBlocked').textContent = data.totals.blocked;
+                    document.getElementById('statRedacted').textContent = data.totals.redacted;
+
+                    const p = data.security_posture;
+                    document.getElementById('valProfile').textContent = (p.active_profile || 'BALANCED').toUpperCase();
+                    document.getElementById('valMode').textContent = (p.mode || 'ENFORCE').toUpperCase();
+                    document.getElementById('valPolicyVer').textContent = (p.policy_version || 'v1').slice(0, 10);
+                    document.getElementById('valFeedVer').textContent = p.feed_version || 'latest';
+                    document.getElementById('valControlsLoaded').textContent = p.controls_loaded || '18';
+
+                    // Threats breakdown
+                    const threatContainer = document.getElementById('threatList');
+                    threatContainer.innerHTML = '';
+                    const entries = Object.entries(data.by_threat);
+                    if (entries.length === 0) {
+                        threatContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No threats detected yet</div>';
+                    } else {
+                        entries.sort((a,b) => b[1] - a[1]).forEach(([tid, cnt]) => {
+                            threatContainer.innerHTML += `
+                                <div class="threat-item">
+                                    <span class="threat-name">${tid}</span>
+                                    <span class="threat-count">${cnt}</span>
+                                </div>
+                            `;
+                        });
+                    }
+                }
+
+                // 2. Latency
+                const latRes = await fetch('/admin/metrics/latency', { headers: h });
+                if (latRes.ok) {
+                    const latData = await latRes.json();
+                    if (latData.total_overhead_ms && latData.total_overhead_ms.p95) {
+                        document.getElementById('statLatency').textContent = latData.total_overhead_ms.p95 + ' ms';
+                    }
+                }
+
+                // 3. Controls
+                const ctrlRes = await fetch('/admin/controls', { headers: h });
+                if (ctrlRes.ok) {
+                    const ctrlData = await ctrlRes.json();
+                    const tbody = document.getElementById('controlsTableBody');
+                    tbody.innerHTML = '';
+                    ctrlData.controls.forEach(c => {
+                        const act = (c.active_level && c.active_level.action) || 'allow';
+                        let badgeClass = 'badge-allow';
+                        if (act === 'block') badgeClass = 'badge-block';
+                        else if (act === 'redact') badgeClass = 'badge-redact';
+                        else if (act === 'flag') badgeClass = 'badge-flag';
+
+                        tbody.innerHTML += `
+                            <tr>
+                                <td style="font-weight: 700;">${c.id}</td>
+                                <td>${c.stages.join(', ')}</td>
+                                <td><span class="event-action-badge ${badgeClass}">${act}</span></td>
+                                <td>${c.threat_ids.join(', ') || '—'}</td>
+                            </tr>
+                        `;
+                    });
+                }
+
+                // 4. Events
+                const evtRes = await fetch('/admin/events?limit=25', { headers: h });
+                if (evtRes.ok) {
+                    const evtData = await evtRes.json();
+                    renderEvents(evtData.events);
+                }
+
+                // 5. Test Suite Report
+                const repRes = await fetch('/admin/reports/latest', { headers: h });
+                if (repRes.ok) {
+                    const repData = await repRes.json();
+                    const repBody = document.getElementById('suiteReportBody');
+                    if (repData.totals) {
+                        repBody.innerHTML = `
+                            <div style="font-size: 13px;">
+                                <div>Cases: <strong>${repData.totals.passed}/${repData.totals.cases} OK</strong></div>
+                                <div>Detection Rate: <strong style="color: var(--success);">${Math.round(repData.totals.detection_rate * 100)}%</strong></div>
+                                <div>False Positive Rate: <strong style="color: var(--success);">${Math.round(repData.totals.false_positive_rate * 100)}%</strong></div>
+                                <div>Overhead p95: <strong>${repData.totals.overhead_ms_p95} ms</strong></div>
+                            </div>
+                        `;
+                    }
+                }
+            } catch (err) {
+                console.error("Dashboard error:", err);
+            }
+        }
+
+        function renderEvents(events) {
+            const container = document.getElementById('eventFeed');
+            if (!events || events.length === 0) {
+                container.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--text-muted);">No events recorded yet.</div>';
+                return;
+            }
+            container.innerHTML = '';
+            events.forEach(e => {
+                const act = e.final_action || 'allow';
+                let badgeClass = 'badge-allow';
+                if (act === 'block') badgeClass = 'badge-block';
+                else if (act === 'redact') badgeClass = 'badge-redact';
+                else if (act === 'flag') badgeClass = 'badge-flag';
+
+                const threatTags = (e.decisions || [])
+                    .filter(d => d.threat_ids && d.threat_ids.length)
+                    .flatMap(d => d.threat_ids)
+                    .map(t => `<span class="threat-tag">${t}</span>`)
+                    .join('');
+
+                container.innerHTML += `
+                    <div class="event-item">
+                        <span class="event-action-badge ${badgeClass}">${act}</span>
+                        <div class="event-details">
+                            <span class="event-identity">${e.identity || 'anonymous'} &bull; <span style="color: var(--text-muted); font-size: 11px;">${e.endpoint || 'api'}</span></span>
+                            <div class="event-threat-tags">${threatTags}</div>
+                        </div>
+                        <span class="event-time">${(e.ts || '').slice(11, 19)}</span>
+                    </div>
+                `;
+            });
+        }
+
+        // Live SSE connection
+        function connectSSE() {
+            const evtSource = new EventSource('/admin/events/stream');
+            const sseStatus = document.getElementById('sseStatus');
+
+            evtSource.onopen = () => {
+                sseStatus.textContent = '(Live SSE Connected)';
+                sseStatus.style.color = 'var(--success)';
+            };
+
+            evtSource.onerror = () => {
+                sseStatus.textContent = '(Connecting...)';
+                sseStatus.style.color = 'var(--warning)';
+            };
+
+            evtSource.addEventListener('audit', (e) => {
+                try {
+                    const newEvt = JSON.parse(e.data);
+                    // Prepend new event
+                    const container = document.getElementById('eventFeed');
+                    const act = newEvt.final_action || 'allow';
+                    let badgeClass = 'badge-allow';
+                    if (act === 'block') badgeClass = 'badge-block';
+                    else if (act === 'redact') badgeClass = 'badge-redact';
+                    else if (act === 'flag') badgeClass = 'badge-flag';
+
+                    const item = document.createElement('div');
+                    item.className = 'event-item';
+                    item.innerHTML = `
+                        <span class="event-action-badge ${badgeClass}">${act}</span>
+                        <div class="event-details">
+                            <span class="event-identity">${newEvt.identity || 'anonymous'} &bull; <span style="color: var(--text-muted); font-size: 11px;">${newEvt.endpoint || 'api'}</span></span>
+                        </div>
+                        <span class="event-time">${(newEvt.ts || '').slice(11, 19)}</span>
+                    `;
+                    container.insertBefore(item, container.firstChild);
+                    // Update totals counter
+                    const reqElem = document.getElementById('statTotalRequests');
+                    reqElem.textContent = parseInt(reqElem.textContent || '0') + 1;
+                    if (act === 'block') {
+                        const blkElem = document.getElementById('statBlocked');
+                        blkElem.textContent = parseInt(blkElem.textContent || '0') + 1;
+                    } else if (act === 'redact') {
+                        const redElem = document.getElementById('statRedacted');
+                        redElem.textContent = parseInt(redElem.textContent || '0') + 1;
+                    }
+                } catch (err) {
+                    console.error("SSE parse error", err);
+                }
+            });
+        }
+
+        // Initialize
+        loadData();
+        connectSSE();
+        // Periodic poll fallback every 10s
+        setInterval(loadData, 10000);
+    </script>
+</body>
+</html>

@@ -60,4 +60,21 @@ def router(rt: Runtime) -> APIRouter:
         reloaded = rt.reload_policy(reason="manual")
         return JSONResponse({"reloaded": reloaded, "policy_version": rt.policy.version})
 
+    @r.get("")
+    @r.get("/")
+    async def get_policy(request: Request) -> JSONResponse:
+        """Active policy (secrets stripped) + version (§5.1)."""
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        if (denied := _require_admin(rt, headers)) is not None:
+            return denied
+        raw = rt.policy.raw.model_dump(mode="json")
+        for ident in raw.get("identities", []):
+            if "api_key_env" in ident:
+                ident["api_key_env"] = "[MASKED]"
+        return JSONResponse({
+            "version": rt.policy.version,
+            "policy": raw,
+            "warnings": list(rt.policy.warnings),
+        })
+
     return r
