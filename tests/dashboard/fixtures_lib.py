@@ -15,10 +15,10 @@ import hashlib
 import math
 import random
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 SEED = 20261003
-ANCHOR = datetime(2026, 10, 4, 12, 47, 0, tzinfo=timezone.utc)
+ANCHOR = datetime(2026, 10, 4, 12, 47, 0, tzinfo=UTC)
 POLICY_V_OLD = "a3f9c1d2e4b7"
 POLICY_V_NEW = "7c1e09b4d2aa"
 FEED_V_OLD = "2026-10-03.1"
@@ -144,7 +144,7 @@ CTL_BASE_MS = {
 
 
 def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
 def parse_iso(s: str) -> datetime:
@@ -403,7 +403,7 @@ def budgets(events, now: datetime):
         b = BUDGETS[bname]
         window = b.get("window", "day")
         wl = WINDOW_LEN[window]
-        wstart = datetime.fromtimestamp((now.timestamp() // wl.total_seconds()) * wl.total_seconds(), tz=timezone.utc)
+        wstart = datetime.fromtimestamp((now.timestamp() // wl.total_seconds()) * wl.total_seconds(), tz=UTC)
         mine = [e for e in req if e.get("identity") == ident_id and parse_iso(e["ts"]) >= wstart]
         last_min = [e for e in req if e.get("identity") == ident_id and parse_iso(e["ts"]) > now - timedelta(minutes=1)]
         tool_sessions = Counter(e.get("session_id") for e in mine if e.get("endpoint") in ("tool_invoke", "mcp"))

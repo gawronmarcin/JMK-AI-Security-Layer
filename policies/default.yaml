@@ -171,7 +171,7 @@ controls:
     enabled: true
     stages: [input]
     # ip_address left out on purpose: users legitimately paste IPs when asking for network help
-    params: {types: [email, phone_pl, pesel, iban, credit_card]}
+    params: {types: [email, phone_pl, pesel, iban, credit_card, id_card_pl, nip]}
     levels:
       strict:     {action: block}
       balanced:   {action: redact}
@@ -194,7 +194,7 @@ controls:
     threat_ids: [TH-05]
     enabled: true
     stages: [output, tool_result]
-    params: {types: [email, phone_pl, pesel, iban, credit_card, ip_address]}
+    params: {types: [email, phone_pl, pesel, iban, credit_card, ip_address, id_card_pl, nip]}
     levels:
       strict:     {action: block}
       balanced:   {action: redact}

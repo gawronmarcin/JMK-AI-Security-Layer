@@ -78,6 +78,32 @@ def _valid_iban(raw: str) -> bool:
     return int(number) % 97 == 1
 
 
+_ID_LETTER_VALUES = {chr(c): c - ord("A") + 10 for c in range(ord("A"), ord("Z") + 1)}
+
+
+def _valid_id_card_pl(raw: str) -> bool:
+    s = raw.replace(" ", "").upper()
+    if len(s) != 9:
+        return False
+    letters, digits = s[:3], s[3:]
+    if not (letters.isalpha() and digits.isdigit()):
+        return False
+    v = [_ID_LETTER_VALUES[c] for c in letters]
+    d = [int(c) for c in digits]
+    weights = (7, 3, 1, 7, 3, 1, 7, 3)
+    vals = (v[0], v[1], v[2], d[1], d[2], d[3], d[4], d[5])
+    return sum(a * b for a, b in zip(vals, weights)) % 10 == d[0]
+
+
+def _valid_nip(raw: str) -> bool:
+    digits = re.sub(r"[ -]", "", raw)
+    if len(digits) != 10 or not digits.isdigit():
+        return False
+    weights = (6, 5, 7, 2, 3, 4, 5, 6, 7)
+    check = sum(int(d) * w for d, w in zip(digits[:9], weights)) % 11
+    return check == int(digits[9])
+
+
 _PLACEHOLDER_WORDS = ("example", "your", "xxxx", "changeme", "placeholder", "redacted", "dummy")
 
 
@@ -166,6 +192,22 @@ PII_DETECTORS: dict[str, tuple[Detector, ...]] = {
             _c(r"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}"
                r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?!\d)(?!\.\d)"),
             "low",
+        ),
+    ),
+    "id_card_pl": (
+        Detector(
+            "id_card_pl",
+            _c(r"(?<![A-Za-z0-9])[A-Za-z]{3}\s*\d{6}(?![A-Za-z0-9])"),
+            "high",
+            validator=_valid_id_card_pl,
+        ),
+    ),
+    "nip": (
+        Detector(
+            "nip",
+            _c(r"(?<!\d)(?:\d{3}[ -]?\d{3}[ -]?\d{2}[ -]?\d{2}|\d{3}[ -]?\d{2}[ -]?\d{2}[ -]?\d{3}|\d{10})(?!\d)"),
+            "high",
+            validator=_valid_nip,
         ),
     ),
 }

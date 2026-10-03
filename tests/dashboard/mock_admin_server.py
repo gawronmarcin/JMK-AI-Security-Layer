@@ -27,13 +27,13 @@ import secrets
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fixtures_lib as fx  # noqa: E402
+import fixtures_lib as fx
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "aicl" / "dashboard"
@@ -53,7 +53,7 @@ class State:
         self.rng_seed = seed
         if scenario != "empty":
             evs = fx.generate_events(seed)
-            self.delta = datetime.now(timezone.utc) - fx.ANCHOR
+            self.delta = datetime.now(UTC) - fx.ANCHOR
             self.events = fx.rebase(evs, self.delta)
             if scenario == "large":
                 self.events = self._large(self.events)
@@ -65,7 +65,7 @@ class State:
     def _large(self, base):
         """~20k events: replays the base set shifted back in 7-day steps is too old, so densify the last 24h."""
         out = list(base)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent = [e for e in base if e.get("type") == "request" and fx.parse_iso(e["ts"]) > now - timedelta(hours=24)]
         k = 0
         while len(out) < 20000 and recent:
@@ -82,7 +82,7 @@ class State:
         return out
 
     def _edge_events(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return [
             {"ts": fx.iso(now - timedelta(minutes=3)), "event_id": "evt_edge_xss", "request_id": "req_" + XSS, "session_id": None, "type": "request",
              "endpoint": "chat", "identity": "support-agent-01" + XSS, "role": "support_agent", "profile": "balanced", "policy_version": XSS,
@@ -105,7 +105,7 @@ class State:
         """Adds a few fresh request events derived from the deterministic generator (cycled)."""
         import random
         rng = random.Random(self.rng_seed + int(time.time()) // 5)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sessions = {}
         new = []
         for i in range(rng.choice((0, 0, 1, 1, 2))):  # ≈ 10 req/min
@@ -119,7 +119,7 @@ class State:
 
     # ---- payloads
     def now(self):
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def req_events(self):
         return [e for e in self.events if isinstance(e, dict) and e.get("ts")]
@@ -320,7 +320,7 @@ def make_handler(state: State, key: str | None, faults: dict):
             self._send(200, {"valid": True, "errors": [], "warnings": [{"loc": ["semantic", "model"], "msg": "Placeholder model name (mock validator)"}]})
 
         def _reload(self):
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             with state.lock:
                 ev = {"ts": fx.iso(now), "event_id": f"evt_reload_{int(now.timestamp())}", "type": "policy.reloaded", "request_id": None,
                       "policy_version": state.policy_version, "feed_version": fx.FEED_V_NEW, "reason": "Manual reload via admin API (mock)", "error": None}

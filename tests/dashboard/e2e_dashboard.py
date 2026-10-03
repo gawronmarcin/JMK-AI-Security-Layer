@@ -38,7 +38,7 @@ async def new_page(browser, base, vp=(1440, 900), errors=None):
     page.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}") if m.type in ("error", "warning") else None)
     dialogs = []
     page.on("dialog", lambda d: (dialogs.append(d.message), asyncio.ensure_future(d.dismiss())))
-    page._dialogs = dialogs  # noqa: SLF001 — test-only bookkeeping
+    page._dialogs = dialogs
     await page.goto(base + "/dashboard/")
     return ctx, page, errs
 

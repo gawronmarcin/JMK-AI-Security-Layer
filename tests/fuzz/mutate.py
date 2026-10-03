@@ -6,7 +6,7 @@ from __future__ import annotations
 import base64
 import codecs
 import random
-from typing import Callable
+from collections.abc import Callable
 
 Messages = list[dict]
 ZW = ["\u200b", "\u200c", "\u200d", "\u2060"]

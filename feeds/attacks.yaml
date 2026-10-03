@@ -104,6 +104,24 @@ signatures:
     refs: ["OWASP LLM01:2025", "AML.T0051.000"]
     added: "2026-10-03"
 
+  - id: SIG-INJ-DE-001
+    set: injection
+    kind: regex
+    pattern: "(?i)ignoriere (alle )?vorherigen anweisungen"
+    severity: high
+    description: "Instruction override (German)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-04"
+
+  - id: SIG-INJ-ES-001
+    set: injection
+    kind: regex
+    pattern: "(?i)ignora (todas )?las instrucciones anteriores"
+    severity: high
+    description: "Instruction override (Spanish)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-04"
+
   # --- Broader injection signatures (weighted, §4.2) -------------------------------------
   # Matched against normalized text (casefolded, homoglyphs folded, zero-width removed) and
   # decoded fragments (base64/hex/url/rot13/leetspeak). severity drives the outcome through

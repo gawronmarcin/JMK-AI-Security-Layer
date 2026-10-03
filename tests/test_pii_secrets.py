@@ -45,6 +45,8 @@ def kinds(decision):
     ("tel +48 600 123 456", "phone_pl"),
     ("call 600 123 456", "phone_pl"),
     ("host 192.168.1.10 down", "ip_address"),
+    ("dowod ABA300000 wydany", "id_card_pl"),
+    ("NIP 123-456-78-19 firmy", "nip"),
 ])
 def test_pii_negative_detected(text, kind):                       # negative = must be caught
     d = run(PiiOutput, text)
@@ -58,6 +60,8 @@ def test_pii_negative_detected(text, kind):                       # negative = m
     "version 1.2.3.4.5",                    # 5 parts is not an IPv4
     "timestamp 1696350000000",              # 13 digits, not a card
     "IBAN PL00 0000 0000 0000 0000 0000 0000",  # fails mod-97
+    "dowod ABA300001 zly",                  # wrong id checksum
+    "NIP 123-456-78-18 zly",                # wrong nip checksum
     "Please summarise the ticket for the customer.",
 ])
 def test_pii_positive_passes(text):                               # positive = must pass

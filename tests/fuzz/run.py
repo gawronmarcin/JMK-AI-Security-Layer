@@ -61,7 +61,7 @@ async def fuzz(strategies: list[str], seed_file: Path, profile: str, rng_seed: i
         by_strategy[r["strategy"]][0] += r["bypass"]; by_strategy[r["strategy"]][1] += 1
         for c in r["controls"]:
             by_control[c][0] += r["bypass"]; by_control[c][1] += 1
-    rate = lambda b, n: round(b / n, 3) if n else None   # noqa: E731
+    rate = lambda b, n: round(b / n, 3) if n else None
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "profile": profile, "rng_seed": rng_seed,
         "total": len(results), "bypasses": sum(r["bypass"] for r in results),
