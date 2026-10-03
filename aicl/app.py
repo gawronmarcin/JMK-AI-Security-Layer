@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from aicl import feeds, registry
 from aicl.admin import policy as admin_policy
 from aicl.audit import AuditWriter
+from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
 from aicl.flows.tool_invoke import handle_tool_invoke
@@ -119,6 +120,11 @@ def create_app(
     @app.post("/v1/tools/invoke")
     async def tools_invoke(request: Request) -> Response:
         flow = await handle_tool_invoke(rt, _body_reader(request), _headers(request))
+        return _respond(flow)
+
+    @app.post("/v1/artifacts/scan")
+    async def artifacts_scan(request: Request) -> Response:
+        flow = await handle_artifact_scan(rt, request, _body_reader(request), _headers(request))
         return _respond(flow)
 
     return app

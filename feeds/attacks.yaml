@@ -13,6 +13,52 @@ signatures:
     refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
     added: "2026-10-03"
 
+  - id: SIG-PKL-002
+    set: artifact
+    kind: pickle_global
+    pattern: "posix.system"
+    severity: critical
+    description: "Pickle GLOBAL calling posix.system (Linux os.system alias)"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-PKL-003
+    set: artifact
+    kind: pickle_global
+    pattern: "nt.system"
+    severity: critical
+    description: "Pickle GLOBAL calling nt.system (Windows os.system alias)"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-PKL-004
+    set: artifact
+    kind: pickle_global
+    pattern: "subprocess.Popen"
+    severity: critical
+    description: "Pickle GLOBAL calling subprocess.Popen"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-PKL-005
+    set: artifact
+    kind: pickle_global
+    pattern: "builtins.eval"
+    severity: critical
+    description: "Pickle GLOBAL calling builtins.eval"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+  - id: SIG-PKL-006
+    set: artifact
+    kind: pickle_global
+    pattern: "builtins.exec"
+    severity: critical
+    description: "Pickle GLOBAL calling builtins.exec"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"
+
+
   - id: SIG-INJ-001
     set: injection
     kind: regex
