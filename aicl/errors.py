@@ -8,11 +8,18 @@ from aicl.models import ERROR_STATUS, Decision, ErrorBody, ErrorDetail, ErrorTyp
 class GatewayError(Exception):
     """Stops request handling. `decision` is the control decision behind a block, if any."""
 
-    def __init__(self, type: ErrorType, message: str, decision: Decision | None = None):
+    def __init__(
+        self,
+        type: ErrorType,
+        message: str,
+        decision: Decision | None = None,
+        approval_id: str | None = None,
+    ):
         super().__init__(message)
         self.type = type
         self.message = message
         self.decision = decision
+        self.approval_id = approval_id
 
     @property
     def status(self) -> int:
@@ -26,5 +33,6 @@ class GatewayError(Exception):
                 threat_ids=self.decision.threat_ids if self.decision else [],
                 control_id=self.decision.control_id if self.decision else None,
                 request_id=request_id,
+                approval_id=self.approval_id,
             )
         )

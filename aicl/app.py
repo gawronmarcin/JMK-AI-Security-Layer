@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 from fastapi.staticfiles import StaticFiles
 
 from aicl import feeds, registry
+from aicl.admin import approvals as admin_approvals
 from aicl.admin import policy as admin_policy
 from aicl.admin import telemetry as admin_telemetry
 from aicl.audit import AuditWriter
@@ -113,6 +114,7 @@ def create_app(
 
     app.include_router(admin_policy.router(rt))
     app.include_router(admin_telemetry.router(rt))
+    app.include_router(admin_approvals.router(rt))
 
     @app.get("/healthz")
     @app.get("/livez")

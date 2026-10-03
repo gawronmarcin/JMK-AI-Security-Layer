@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aicl.approvals import ApprovalStore
 from aicl.audit import AuditWriter, new_event
 from aicl.engine import missing_controls
 from aicl.feeds import FeedStore
@@ -54,6 +55,7 @@ class Runtime:
     policy_path: Path | None = None  # None = no hot reload
     reload_interval: float | None = 1.0  # seconds between file checks; None = no watcher
     policy_listeners: list[PolicyListener] = field(default_factory=list)
+    approvals: ApprovalStore = field(default_factory=ApprovalStore)
     _started: bool = field(default=False, repr=False)
     _watcher: asyncio.Task[None] | None = field(default=None, repr=False)
     _sigs: dict[Path, _FileSig] = field(default_factory=dict, repr=False)

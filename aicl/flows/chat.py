@@ -172,14 +172,14 @@ async def _run(
         policy_version=policy.version,
     )
 
-    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)))
+    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)), rec)
 
     model = policy.models.get(req.model)
     if model is None:
         raise GatewayError(ErrorType.bad_request, f"unknown model {req.model!r}")
 
     result = rec.add_stage(await run_stage(policy, ctx, Stage.input, rt.controls))
-    stop_if_blocked(result)
+    stop_if_blocked(result, rec)
     if result.taints_session:
         await rt.state.mark_tainted(rec.session_id, "input")
     if result.action == Action.redact:
@@ -217,7 +217,7 @@ async def _run(
 
     out_ctx = ctx.model_copy(update={"segments": out_segments})
     result = rec.add_stage(await run_stage(policy, out_ctx, Stage.output, rt.controls))
-    stop_if_blocked(result)
+    stop_if_blocked(result, rec)
     if result.action == Action.redact:
         for seg in result.segments:
             choices[seg.idx - base].setdefault("message", {})["content"] = seg.text
@@ -230,13 +230,13 @@ async def _run(
             # Check proposed tool call arguments for output leaks (secrets/PII)
             out_arg_ctx = ctx.model_copy(update={"stage": Stage.output, "segments": arg_segments})
             out_arg_res = rec.add_stage(await run_stage(policy, out_arg_ctx, Stage.output, rt.controls))
-            stop_if_blocked(out_arg_res)
+            stop_if_blocked(out_arg_res, rec)
             if out_arg_res.action == Action.redact:
                 args = apply_redacted_args(args, out_arg_res.segments)
                 _update_choice_tool_call_args(choices[choice_idx], tool, args)
 
         call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool": tool, "tool_args": args})
-        stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)))
+        stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec)
 
     final = rec.final_action()
     rec.emit(final)

@@ -93,8 +93,15 @@ class TaintGuard:
         )
 
         if privilege in blocked_privileges:
-            default_action = taint_spec.action if taint_spec else "block"
-            action = Action(_cfg_val(cfg, "action", default_action))
+            cfg_action = _cfg_val(cfg, "action", None)
+            if cfg_action in (Action.require_approval, "require_approval"):
+                action = Action.require_approval
+            elif taint_spec and taint_spec.action:
+                action = Action(taint_spec.action)
+            elif cfg_action is not None:
+                action = Action(cfg_action)
+            else:
+                action = Action.block
             return Decision(
                 control_id=self.id,
                 threat_ids=threat_ids,

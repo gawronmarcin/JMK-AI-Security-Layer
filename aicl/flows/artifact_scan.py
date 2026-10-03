@@ -104,9 +104,9 @@ async def _run(
         policy_version=policy.version,
     )
 
-    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)))
+    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)), rec)
     art_ctx = ctx.model_copy(update={"stage": Stage.artifact})
-    stop_if_blocked(rec.add_stage(await run_stage(policy, art_ctx, Stage.artifact, rt.controls)))
+    stop_if_blocked(rec.add_stage(await run_stage(policy, art_ctx, Stage.artifact, rt.controls)), rec)
 
     final = rec.final_action()
     rec.emit(final)

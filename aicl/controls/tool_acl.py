@@ -106,6 +106,21 @@ class ToolAcl:
                         reason=f"tool {ctx.tool!r} arguments failed schema validation: {err}",
                     )
 
+        # 3. Guard against SSRF / cloud metadata targets and dangerous schemes
+        args = ctx.tool_args or {}
+        if isinstance(args, dict):
+            for k, val in args.items():
+                if isinstance(val, str) and ("url" in k.lower() or "uri" in k.lower()):
+                    low_val = val.lower().strip()
+                    if any(bad in low_val for bad in ("169.254.169.254", "metadata.google.internal", "metadata.azure.com")) or low_val.startswith(("file://", "gopher://", "dict://")):
+                        return Decision(
+                            control_id=self.id,
+                            threat_ids=threat_ids,
+                            action=action,
+                            severity="critical",
+                            reason=f"tool {ctx.tool!r} argument {k!r} contains prohibited SSRF/metadata target",
+                        )
+
         return Decision(
             control_id=self.id,
             threat_ids=threat_ids,

@@ -412,3 +412,17 @@ async def test_prompt_injection_in_tool_arguments_is_blocked(gw):
     assert err["control_id"] == "C-INJ-PAT"
     assert "TH-01" in err["threat_ids"]
 
+
+async def test_ssrf_metadata_in_tool_arguments_is_blocked(tmp_path):
+    async with serve_tool_gw(tmp_path) as g:
+        r = await g.invoke(
+            "fetch_url",
+            {"url": "http://169.254.169.254/latest/meta-data/"},
+            key="research",
+        )
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["type"] == "aicl_blocked"
+    assert err["control_id"] == "C-TOOL-ACL"
+    assert "prohibited SSRF/metadata target" in err["message"]
+

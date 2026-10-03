@@ -281,14 +281,37 @@ def _size_decision(threat_ids: list[str], action: Action, size: int, limit: int,
     )
 
 
-def stop_if_blocked(result: StageResult) -> None:
+def stop_if_blocked(result: StageResult, rec: RequestRecord | None = None) -> None:
     """Raise when a stage ended in block / require_approval."""
     if not result.stopped:
         return
     assert result.blocking is not None
     d = result.blocking
     if result.action == Action.require_approval:
-        raise GatewayError(ErrorType.approval_required, f"approval required by {d.control_id}: {d.reason}", d)
+        approval_id = None
+        if rec is not None:
+            # Check if an approval ID was supplied by the client and already approved by operator
+            claimed_id = rec.headers.get("x-aicl-approval-id") or rec.headers.get("x-aicl-approval")
+            if claimed_id and rec.rt.approvals.is_approved(claimed_id):
+                # Operator previously approved this action: permit execution
+                return
+            # Register a new pending approval
+            appr = rec.rt.approvals.create(
+                request_id=rec.request_id,
+                session_id=rec.session_id,
+                control_id=d.control_id,
+                threat_ids=d.threat_ids,
+                reason=d.reason,
+                identity=rec.identity.id if rec.identity else None,
+                action_type=rec.endpoint,
+            )
+            approval_id = appr.approval_id
+        raise GatewayError(
+            ErrorType.approval_required,
+            f"approval required by {d.control_id}: {d.reason}",
+            d,
+            approval_id=approval_id,
+        )
     if d.control_id in _BUDGET_CONTROLS:  # §5.3: budget exceeded is 429, not 403
         raise GatewayError(ErrorType.budget_exceeded, f"budget exceeded ({d.control_id}): {d.reason}", d)
     raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {d.reason}", d)

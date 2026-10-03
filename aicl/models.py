@@ -267,6 +267,7 @@ class ErrorDetail(_Model):
     threat_ids: list[str] = Field(default_factory=list)
     control_id: str | None = None
     request_id: str | None = None
+    approval_id: str | None = None
 
 
 class ErrorBody(_Model):
