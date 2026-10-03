@@ -29,6 +29,7 @@ from aicl import feeds, registry
 from aicl.audit import AuditWriter
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
+from aicl.flows.tool_invoke import handle_tool_invoke
 from aicl.integrations import semantic_judge_listener
 from aicl.models import Control
 from aicl.policy.loader import load_policy_file
@@ -46,6 +47,7 @@ def create_app(
     base_dir: str | Path | None = None,
     audit_path: str | Path | None = None,
     upstream_transport: httpx.AsyncBaseTransport | None = None,
+    tool_transport: httpx.AsyncBaseTransport | None = None,
     controls: Mapping[str, Control] | None = None,
     reload_interval: float | None = 1.0,
 ) -> FastAPI:
@@ -54,6 +56,7 @@ def create_app(
     env:                identity keys and upstream URLs; defaults to os.environ
     base_dir:           relative paths (audit, feeds) resolve against it; defaults to cwd
     upstream_transport: httpx transport for LLM upstreams (tests: ASGITransport of a mock)
+    tool_transport:     httpx transport for tool backends (defaults to upstream_transport if unset)
     controls:           control set to run; defaults to every registered control
     reload_interval:    seconds between policy/feed file checks; None disables hot reload
                         (`app.state.runtime.reload_policy()` still works)
@@ -77,7 +80,7 @@ def create_app(
         env=env,
         state=InMemoryStore(),
         audit=AuditWriter(audit_file, policy.raw.audit.max_event_bytes),
-        upstream=UpstreamClient(env, transport=upstream_transport),
+        upstream=UpstreamClient(env, transport=upstream_transport, tool_transport=tool_transport),
         feeds=feeds.store,
         controls=controls,
         policy_path=policy_path,
@@ -108,6 +111,11 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
         flow = await handle_chat(rt, _body_reader(request), _headers(request))
+        return _respond(flow)
+
+    @app.post("/v1/tools/invoke")
+    async def tools_invoke(request: Request) -> Response:
+        flow = await handle_tool_invoke(rt, _body_reader(request), _headers(request))
         return _respond(flow)
 
     return app

@@ -82,7 +82,7 @@ def authenticate(policy: CompiledPolicy, headers: Mapping[str, str]) -> Identity
     return identity
 
 
-def _auth_decision(reason: str) -> Decision:
+def auth_decision(reason: str) -> Decision:
     return Decision(
         control_id=AUTH_CONTROL_ID,
         threat_ids=AUTH_THREATS,
@@ -90,6 +90,9 @@ def _auth_decision(reason: str) -> Decision:
         severity="high",
         reason=reason,
     )
+
+
+_auth_decision = auth_decision
 
 
 @dataclass
@@ -268,3 +271,24 @@ def stop_if_blocked(result: StageResult) -> None:
     if d.control_id in _BUDGET_CONTROLS:  # §5.3: budget exceeded is 429, not 403
         raise GatewayError(ErrorType.budget_exceeded, f"budget exceeded ({d.control_id}): {d.reason}", d)
     raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {d.reason}", d)
+
+
+async def account_usage(rt: Runtime, rec: RequestRecord) -> None:
+    """Post stage: usage counters per identity and budget window (§5.5)."""
+    if rec.identity is None:
+        return
+    budget = rec.policy.budget_for(rec.identity.role)
+    window = budget.window if budget else "day"
+    usage = rec.usage or Usage()
+    await rt.state.add_usage(
+        rec.identity.id,
+        window,
+        requests=1,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cost_usd=usage.cost_usd,
+        compute_seconds=usage.compute_seconds,
+    )
+    if window != "minute":
+        # max_requests_per_minute is checked against the minute window, whatever the budget window.
+        await rt.state.add_usage(rec.identity.id, "minute", requests=1)
