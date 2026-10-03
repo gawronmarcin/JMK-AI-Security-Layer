@@ -49,6 +49,16 @@ def configure(settings: SemanticSettings, judge: Judge | None = None, rng: rando
         _STATE.rng = rng
 
 
+def status() -> dict[str, Any]:
+    """For /healthz (public, so no URLs): which judge is configured. Not a liveness probe."""
+    s = _STATE.settings
+    return {
+        "model": s.model if s else None,
+        "ready": bool(s is not None and s.model_ready and _STATE.judge is not None),
+        "timeout_ms": s.timeout_ms if s else None,
+    }
+
+
 def select_segments(ctx: RequestContext, s: SemanticSettings, rng: random.Random) -> list[Segment]:
     """Pure gating: which segments get judged for this request (latest first, untrusted first, capped)."""
     cands = [x for x in ctx.segments if x.origin in JUDGEABLE_ORIGINS and x.text.strip()]

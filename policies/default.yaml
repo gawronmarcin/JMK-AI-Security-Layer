@@ -138,13 +138,22 @@ controls:
       balanced:   {action: block, min_severity: medium}
       permissive: {action: flag,  min_severity: high}
 
+  # Tier 2 of the injection cascade: C-INJ-PAT (regex) -> C-INJ-BASTION (classifier) -> C-INJ-SEM (Ollama).
+  # risk >= threshold_block -> action; risk in [threshold_grey, threshold_block) -> escalated to the
+  # Ollama judge (keep that range inside semantic.run_when.risk_between). Setup: docs/SEMANTIC_SETUP.md
   injection_bastion:
     id: C-INJ-BASTION
     threat_ids: [TH-01, TH-02]
-    enabled: false
-    on_error: fail_open
+    enabled: true
+    on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
-    params: {threshold_block: 0.80, threshold_grey: 0.30}
+    params:
+      backend: none                     # none (skipped) | bastion (in-process SDK) | remote (HTTP /protect)
+      url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8080 (Bastion Docker image)
+      model: ""                         # bastion: HF repo id, empty = free English model
+      timeout_ms: 300
+      threshold_block: 0.80
+      threshold_grey: 0.30
     levels:
       strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25}
       balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30}
