@@ -137,6 +137,18 @@ controls:
       strict:     {action: block, min_severity: low}
       balanced:   {action: block, min_severity: medium}
       permissive: {action: flag,  min_severity: high}
+
+  injection_bastion:
+    id: C-INJ-BASTION
+    threat_ids: [TH-01, TH-02]
+    enabled: false
+    on_error: fail_open
+    stages: [input, tool_result]
+    params: {threshold_block: 0.80, threshold_grey: 0.30}
+    levels:
+      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25}
+      balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30}
+      permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40}
     
   pii_input:
     id: C-PII-IN
