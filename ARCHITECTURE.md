@@ -878,5 +878,6 @@ Takes seed attacks (`tests/cases/attacks_seed.yaml`) and produces variants: base
 
 ## Changelog
 
+- **v0.2.1 (R5, guidance only)** — dashboard implemented in `aicl/dashboard/` (static, Chart.js vendored, no build step, served by the gateway at `/dashboard/`). It reads only `/healthz` and `/admin/*`; payload shapes, accepted aliases and remaining backend gaps are documented in `aicl/dashboard/README.md`. Test and fuzz reports come from `/admin/reports/latest` and `/admin/reports/fuzz` (admin-only). No CONTRACT section changed.
 - **v0.2** — split CONTRACT vs GUIDANCE; fixed semantic-judge gating (judge no longer depends on pattern hits only); secrets matched on original text (casefolding broke case-sensitive formats); `decoded` view + rule for unredactable decoded hits; replaced undefined `Decision.meta` with `risk`/`taints_session`; pseudo-streaming instead of rejecting `stream=true`; MCP proxy (P1) + tool-routing caveat; canary injection defined; removed-control semantics; budget null = no limit; Docker polling for hot reload; dashboard auth; rebalanced control ownership (R2 was overloaded); OSS/classifier options added to open decisions.
 - **v0.1** — initial proposal.

@@ -15,6 +15,7 @@ Tests build their own instance and plug mock upstreams in memory:
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -23,7 +24,8 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from aicl import feeds, registry
 from aicl.admin import policy as admin_policy
@@ -41,6 +43,12 @@ from aicl.runtime import Runtime
 from aicl.state import InMemoryStore
 
 DEFAULT_POLICY = "policies/default.yaml"
+DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+
+# The dashboard loads ES modules, which browsers refuse unless served as JavaScript. On Windows
+# Python may take the .js type from the registry (often text/plain), so set it explicitly.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 
 
 def create_app(
@@ -116,26 +124,13 @@ def create_app(
             "feed_version": rt.feeds.current().version,
         }
 
-    dashboard_file = Path(__file__).resolve().parent / "dashboard" / "index.html"
+    # Static dashboard (aicl/dashboard/README.md). It only calls /healthz and /admin/*, with the
+    # admin key the operator types in; the files themselves are public and contain no data.
+    @app.get("/dashboard", include_in_schema=False)
+    async def dashboard_redirect() -> Response:
+        return RedirectResponse("/dashboard/")
 
-    @app.get("/dashboard")
-    @app.get("/dashboard/")
-    async def dashboard() -> Response:
-        if dashboard_file.exists():
-            return FileResponse(dashboard_file, media_type="text/html")
-        return JSONResponse({
-            "status": "dashboard_ready",
-            "admin_endpoints": [
-                "/admin/policy",
-                "/admin/controls",
-                "/admin/metrics/summary",
-                "/admin/metrics/latency",
-                "/admin/metrics/budgets",
-                "/admin/events",
-                "/admin/events/stream",
-                "/admin/export/audit.jsonl",
-            ],
-        })
+    app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:

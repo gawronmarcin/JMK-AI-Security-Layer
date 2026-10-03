@@ -24,6 +24,7 @@ from aicl.policy.loader import PolicyError, parse_policy
 from aicl.policy.schema import CompiledPolicy
 from aicl.proxy import UpstreamClient
 from aicl.state import StateStore
+from aicl.utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class Runtime:
     _started: bool = field(default=False, repr=False)
     _watcher: asyncio.Task[None] | None = field(default=None, repr=False)
     _sigs: dict[Path, _FileSig] = field(default_factory=dict, repr=False)
+    # Outcome of the latest load/reload attempt, for /admin/policy: {at, result, reason, error}.
+    last_reload: dict[str, str | None] = field(default_factory=dict)
 
     async def start(self) -> None:
         await self.audit.start()
@@ -64,6 +67,7 @@ class Runtime:
         self.feeds.configure(self.policy.raw.signature_feeds, force=True)
         listener_errors = self._notify(self.policy)
         self._emit_reloaded(self.policy, {"reason": "startup"}, listener_errors)
+        self._record_reload("reloaded", "startup")
         self._sigs = self._snapshot()
         if self.policy_path is not None and self.reload_interval:
             self._watcher = asyncio.create_task(self._watch(self.reload_interval), name="aicl-reload-watcher")
@@ -105,8 +109,10 @@ class Runtime:
                     error="invalid policy, previous version kept",
                 )
             )
+            self._record_reload("rejected", reason, "; ".join(errors))
             return False
         if new.version == self.policy.version:
+            self._record_reload("ok (unchanged)", reason)
             return False  # touched but unchanged
 
         old = self.policy
@@ -120,7 +126,11 @@ class Runtime:
             "removed_controls": sorted(set(old.raw.controls) - set(new.raw.controls)),
         }
         self._emit_reloaded(new, detail, listener_errors)
+        self._record_reload("reloaded", reason)
         return True
+
+    def _record_reload(self, result: str, reason: str, error: str | None = None) -> None:
+        self.last_reload = {"at": utc_now_iso(), "result": result, "reason": reason, "error": error}
 
     def check_files(self) -> None:
         """One watcher pass: reload whatever changed since the last pass."""

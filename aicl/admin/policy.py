@@ -58,7 +58,17 @@ def router(rt: Runtime) -> APIRouter:
         if (denied := _require_admin(rt, headers)) is not None:
             return denied
         reloaded = rt.reload_policy(reason="manual")
-        return JSONResponse({"reloaded": reloaded, "policy_version": rt.policy.version})
+        last = rt.last_reload
+        rejected = last.get("result") == "rejected"
+        return JSONResponse(
+            {
+                "ok": not rejected,
+                "reloaded": reloaded,
+                "result": last.get("result"),
+                "errors": [last["error"]] if rejected and last.get("error") else [],
+                "policy_version": rt.policy.version,
+            }
+        )
 
     @r.get("")
     @r.get("/")
@@ -71,10 +81,18 @@ def router(rt: Runtime) -> APIRouter:
         for ident in raw.get("identities", []):
             if "api_key_env" in ident:
                 ident["api_key_env"] = "[MASKED]"
-        return JSONResponse({
-            "version": rt.policy.version,
-            "policy": raw,
-            "warnings": list(rt.policy.warnings),
-        })
+        last = rt.last_reload
+        return JSONResponse(
+            {
+                "version": rt.policy.version,
+                "policy_version": rt.policy.version,
+                "feed_version": rt.feeds.current().version,
+                "loaded_at": last.get("at"),
+                "last_reload_result": last.get("result"),
+                "last_reload_error": last.get("error"),
+                "policy": raw,
+                "warnings": list(rt.policy.warnings),
+            }
+        )
 
     return r

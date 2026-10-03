@@ -33,6 +33,11 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["aicl*"]
 
+[tool.setuptools.package-data]
+# Static dashboard served at /dashboard/ (aicl/dashboard/README.md).
+aicl = ["dashboard/*.html", "dashboard/*.js", "dashboard/*.css", "dashboard/*.md", "dashboard/views/*.js",
+        "dashboard/vendor/*", "dashboard/demo/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

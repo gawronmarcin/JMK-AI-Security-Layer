@@ -67,6 +67,10 @@ class AuditWriter:
     def add_listener(self, fn: Listener) -> None:
         self._listeners.append(fn)
 
+    def remove_listener(self, fn: Listener) -> None:
+        if fn in self._listeners:
+            self._listeners.remove(fn)
+
     def emit(self, event: AuditEvent) -> None:
         """Non-blocking; safe to call from request handlers."""
         self._recent.append(event)

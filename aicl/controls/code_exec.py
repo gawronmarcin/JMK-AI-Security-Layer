@@ -85,9 +85,9 @@ class CodeExecPatternsControl:
         # Also load from feed if code_exec set has signatures
         snap = feeds.current()
         for sig in snap.for_set("code_exec"):
-            rx = snap.regex(sig.id)
-            if rx is not None:
-                active_regexes.append((sig.id, rx))
+            feed_rx = snap.regex(sig.id)
+            if feed_rx is not None:
+                active_regexes.append((sig.id, feed_rx))
 
         matches: list[Match] = []
 

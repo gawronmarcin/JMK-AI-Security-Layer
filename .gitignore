@@ -17,3 +17,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Dashboard tooling (tests/dashboard, optional Node/Playwright)
+node_modules/

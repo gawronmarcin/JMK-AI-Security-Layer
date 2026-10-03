@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from tests.core.test_gateway import gw  # noqa: F401
+from tests.core.test_gateway import serve
+
+
+@pytest.fixture
+async def gw(tmp_path):
+    async with serve(tmp_path) as g:
+        yield g
 
 
 @pytest.fixture
@@ -25,8 +31,8 @@ async def test_probes(gw):
 
 
 async def test_dashboard_endpoint(gw):
-    r = await gw.client.get("/dashboard")
-    assert r.status_code == 200
+    r = await gw.client.get("/dashboard", follow_redirects=True)
+    assert r.status_code == 200 and "<title>" in r.text
 
 
 async def test_get_policy(gw, admin_headers, user_headers):
