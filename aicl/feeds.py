@@ -188,10 +188,11 @@ class FeedStore:
         """Local feed files, for the watcher."""
         return [self._resolve(r.path) for r in self._refs.values() if r.path is not None]
 
-    def configure(self, refs: Sequence[FeedRef]) -> None:
-        """Set which feeds to load (from the policy). Reloads only feeds whose definition changed."""
+    def configure(self, refs: Sequence[FeedRef], *, force: bool = False) -> None:
+        """Set which feeds to load (from the policy). Reloads only feeds whose definition
+        changed, or all of them with force=True (startup)."""
         new = {r.name: r for r in refs}
-        changed = [name for name, r in new.items() if self._refs.get(name) != r]
+        changed = [name for name, r in new.items() if force or self._refs.get(name) != r]
         for name in set(self._refs) - set(new):
             self._good.pop(name, None)
         self._refs = new
