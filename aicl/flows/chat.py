@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aicl.engine import run_stage
 from aicl.errors import GatewayError
-from aicl.flows.common import BodyReader, FlowResponse, RequestRecord, stop_if_blocked
+from aicl.flows.common import BodyReader, FlowResponse, RequestRecord, account_usage, stop_if_blocked
 from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
 from aicl.policy.schema import ModelSpec
@@ -223,22 +223,4 @@ async def _run(
     return FlowResponse(status=200, body=body, headers=rec.response_headers(final), stream=req.stream)
 
 
-async def _account(rt: Runtime, rec: RequestRecord) -> None:
-    """Post stage: usage counters per identity and budget window (§5.5)."""
-    if rec.identity is None:
-        return
-    budget = rec.policy.budget_for(rec.identity.role)
-    window = budget.window if budget else "day"
-    usage = rec.usage or Usage()
-    await rt.state.add_usage(
-        rec.identity.id,
-        window,
-        requests=1,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        cost_usd=usage.cost_usd,
-        compute_seconds=usage.compute_seconds,
-    )
-    if window != "minute":
-        # max_requests_per_minute is checked against the minute window, whatever the budget window.
-        await rt.state.add_usage(rec.identity.id, "minute", requests=1)
+_account = account_usage
