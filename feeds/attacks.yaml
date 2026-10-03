@@ -1,0 +1,14 @@
+# Historical-attack signature feed (ARCHITECTURE.md §6.8). Owned by the detectors team.
+# Externally managed: hot-reloaded, an invalid file keeps the last good version.
+# Bump feed_version on every change; it is recorded in each audit event.
+
+feed_version: "2026-10-03.1"
+signatures:
+  - id: SIG-PKL-001
+    set: artifact                       # injection | artifact | code_exec | supply_chain | exfil
+    kind: pickle_global                 # regex | pickle_global | package | model_repo | url_pattern | sha256
+    pattern: "os.system"                # meaning depends on kind
+    severity: critical
+    description: "Pickle GLOBAL calling os.system (arbitrary command execution on load)"
+    refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
+    added: "2026-10-03"

@@ -608,6 +608,18 @@ signatures:
     added: "2026-10-03"
 ```
 
+**Access from controls** (`aicl/feeds.py`, agreed between R1 and the detectors team). Controls do not get the feed through `(ctx, cfg)`; they read the process-wide store:
+
+```python
+from aicl import feeds
+snap = feeds.current()                 # immutable FeedSnapshot
+for sig in snap.for_set("artifact"):   # signatures grouped by `set`
+    ...
+snap.regex("SIG-INJ-001")              # precompiled re.Pattern for kind=regex, else None
+```
+
+R1 calls `store.configure(policy.raw.signature_feeds)` at startup and on every policy swap, calls `store.reload()` from the single file watcher, records `current().version` as the audit `feed_version` at request start, and maps load/reject reports to `feed.reloaded` events. An invalid feed keeps its last good version (`on_unavailable: keep_last_good`) or contributes nothing (`empty`). Feed entries are validated on load (`extra=forbid`, regexes must compile, `sha256` must be 64 hex chars, ids unique). `url:` feeds are not implemented yet. Known limitation: a reload between two controls of one request can show them different versions.
+
 ### 6.9 Audit
 
 ```yaml
