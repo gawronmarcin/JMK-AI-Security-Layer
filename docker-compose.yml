@@ -1,6 +1,8 @@
 # `docker compose up`                       -> gateway :8080 + mock LLM + mock tools
 # `docker compose run --rm tests`           -> pełny suite w kontenerze (§11.8)
 # `docker compose --profile ollama up`      -> dodatkowo prawdziwy Ollama
+# `docker compose --profile bastion up`     -> dodatkowo klasyfikator Bastion (:8090, backend: remote)
+#  Podpięcie obu: docs/SEMANTIC_SETUP.md
 x-app: &app
   build: {context: ., dockerfile: docker/Dockerfile}
   image: aicl:dev
@@ -24,6 +26,7 @@ services:
     environment:
       AICL_UPSTREAM_MOCK_URL: http://mock-llm:9001/v1
       AICL_OLLAMA_URL: ${AICL_OLLAMA_URL_OVERRIDE:-http://mock-llm:9001}
+      AICL_BASTION_URL: ${AICL_BASTION_URL_OVERRIDE:-http://bastion:8080}
       AICL_TOOL_DOCS_URL: http://mock-tools:9002/tools/search_docs
       AICL_TOOL_FETCH_URL: http://mock-tools:9002/tools/fetch_url
       AICL_TOOL_MAIL_URL: http://mock-tools:9002/tools/send_email
@@ -41,6 +44,12 @@ services:
     command: pytest -q
     environment: {AICL_TEST_REQUIRE_GATEWAY: "1"}
     volumes: ["./reports:/app/reports"]
+
+  bastion:
+    # Bastion Prompt Protection microservice (AGPL-3.0, free English model): POST /protect
+    image: ghcr.io/bastion-soft/bastion-prompt-protection:latest
+    profiles: [bastion]
+    ports: ["8090:8080"]                # 8080 is the gateway
 
   ollama:
     image: ollama/ollama:latest

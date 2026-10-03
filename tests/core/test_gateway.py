@@ -307,11 +307,13 @@ async def test_startup_events(gw):
 
 async def test_healthz(gw):
     r = await gw.client.get("/healthz")
-    assert r.json() == {
-        "status": "ok",
-        "policy_version": gw.app.state.runtime.policy.version,
-        "feed_version": "2026-10-03.2",
-    }
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["policy_version"] == gw.app.state.runtime.policy.version
+    assert body["feed_version"] == "2026-10-03.2"
+    # AI detectors as configured (public endpoint: no URLs); default policy has no classifier backend
+    assert body["detectors"]["classifier"] == {"backend": "none", "ready": False, "error": None}
+    assert set(body["detectors"]["judge"]) == {"model", "ready", "timeout_ms"}
 
 
 async def test_disallowed_model_is_blocked_by_c_model_allow(gw):

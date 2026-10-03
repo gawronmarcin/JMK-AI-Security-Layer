@@ -68,7 +68,8 @@ def apply_test_environment(policy: dict[str, Any], workdir: Path) -> dict[str, A
     """Nadpisania, które sprawiają, że polityka działa offline i w izolacji:
     * audit -> plik w katalogu tymczasowym przypadku,
     * względne ścieżki feedów -> bezwzględne (temp policy leży poza repo),
-    * model sędziego i modelu lokalnego -> nazwy rozpoznawane przez mock.
+    * model sędziego i modelu lokalnego -> nazwy rozpoznawane przez mock,
+    * backend klasyfikatora C-INJ-BASTION -> none (chyba że AICL_TEST_CLASSIFIER_BACKEND).
     """
     p = copy.deepcopy(policy)
     p.setdefault("audit", {})["path"] = str(workdir / "audit.jsonl")
@@ -78,6 +79,10 @@ def apply_test_environment(policy: dict[str, Any], workdir: Path) -> dict[str, A
     if isinstance(p.get("semantic"), dict):
         # testy live podmieniają sędziego na prawdziwy model Ollamy
         p["semantic"]["model"] = os.environ.get("AICL_TEST_JUDGE_MODEL", JUDGE_MODEL)
+    for c in (p.get("controls") or {}).values():
+        if isinstance(c, dict) and c.get("id") == "C-INJ-BASTION":
+            # klasyfikator: domyślnie wyłączony w testach (offline, deterministycznie); live: env
+            c.setdefault("params", {})["backend"] = os.environ.get("AICL_TEST_CLASSIFIER_BACKEND", "none")
     for m in p.get("models", []) or []:
         if m.get("provider") == "ollama":
             m["upstream_model"] = LOCAL_MODEL

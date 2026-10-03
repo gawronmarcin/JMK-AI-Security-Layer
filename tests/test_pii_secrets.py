@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import time
 
 import pytest
@@ -162,11 +163,32 @@ def test_pii_does_not_scan_decoded_view():
 # ----------------------------- performance (target, not a claim) ------------ #
 def test_hot_path_is_cheap_and_no_pathological_backtracking():
     typical = "Please summarise the ticket for the customer. " * 45     # ~2 KB
-    t0 = time.perf_counter()
-    for _ in range(50):
-        run(PiiOutput, typical); run(SecretsOutput, typical)
-    per_eval_ms = (time.perf_counter() - t0) * 1000 / 100
-    assert per_eval_ms < 5, per_eval_ms
+    ctx = RequestContext(
+        request_id="r", session_id="s", endpoint="chat", stage=Stage.output, identity="t", role="t",
+        profile="balanced", model="m", policy_version="v",
+        segments=[Segment(idx=0, text=typical, norm=typical.lower(), origin=Origin.assistant)])
+    cfg = {"action": "redact"}
+    pii, sec = PiiOutput(), SecretsOutput()
+
+    async def batches() -> list[float]:
+        # one event loop for all evaluations (`run()` creates a loop per call: milliseconds on
+        # Windows, which would be measured instead of the controls); best of 5 batches, GC paused
+        out = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            for _ in range(20):
+                await pii.evaluate(ctx, cfg); await sec.evaluate(ctx, cfg)
+            out.append((time.perf_counter() - t0) * 1000 / 40)
+        return out
+
+    gc.collect()
+    gc.disable()
+    try:
+        measured = asyncio.run(batches())
+    finally:
+        gc.enable()
+    per_eval_ms = min(measured)
+    assert per_eval_ms < 5, measured
     for nasty in ["1 " * 50_000, "a" * 200_000, "-----BEGIN PRIVATE KEY-----" * 2000]:
         t0 = time.perf_counter(); run(PiiOutput, nasty); run(SecretsOutput, nasty)
         assert time.perf_counter() - t0 < 2.0

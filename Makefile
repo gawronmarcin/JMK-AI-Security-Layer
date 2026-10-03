@@ -4,7 +4,7 @@ VENV    ?= .venv
 BIN     := $(VENV)/bin
 PYTEST  := $(BIN)/pytest
 
-.PHONY: install test test-live test-fast fuzz report mocks dev lint clean
+.PHONY: install test test-live test-fast check-semantic fuzz report mocks dev lint clean
 
 $(BIN)/activate:
 	$(PY) -m venv $(VENV)
@@ -18,6 +18,9 @@ test: install                       ## pełny suite: bez Ollamy, bez internetu
 
 test-live: install                  ## + testy z prawdziwym Ollamą
 	AICL_LIVE=1 $(PYTEST) -q --live
+
+check-semantic: install             ## Ollama + klasyfikator: dostępność, latencja, kaskada (docs/SEMANTIC_SETUP.md)
+	$(BIN)/python scripts/check_semantic.py $(ARGS)
 
 test-fast: install                  ## tylko to, co nie wymaga gatewaya (mocki, schematy YAML)
 	$(PYTEST) -q -m "not gateway"
