@@ -17,3 +17,154 @@
    steps: [{request: {endpoint: artifact_scan, artifact: {generator: pickle_posix_system}}, expect: {status: 403}}]}
 - {id: ART-009, title: "Unknown archive format is refused, not skipped", kind: edge, controls: [C-ARTIFACT], threats: [TH-14], identity: support-agent-01,
    steps: [{request: {endpoint: artifact_scan, artifact: {generator: unknown_archive_7z}}, expect: {status: 403}}]}
+
+# Scanner bypasses: module-level denylist, content over file name, memo-resolved
+# STACK_GLOBAL, archive limits.
+- id: ART-010
+  title: os.popen (not just os.system) is blocked
+  kind: negative
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: pickle_custom_global
+        params:
+          module: os
+          name: popen
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-011
+  title: runpy._run_code is blocked
+  kind: negative
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: pickle_custom_global
+        params:
+          module: runpy
+          name: _run_code
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-012
+  title: Malicious pickle disguised as .safetensors is blocked
+  kind: negative
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: pickle_os_system_p0
+        filename: model.safetensors
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-013
+  title: STACK_GLOBAL operands taken from the memo are resolved
+  kind: edge
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: pickle_memo_stack_global
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-014
+  title: Pickle in a zip entry without .pkl extension is scanned
+  kind: edge
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: zip_entry_without_extension_malicious
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-015
+  title: Decompression bomb is refused
+  kind: edge
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: zip_bomb
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-016
+  title: Archive with path traversal entry is refused
+  kind: edge
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: zip_path_traversal
+    expect:
+      status: 403
+      action: block
+      control_ids:
+      - C-ARTIFACT
+- id: ART-017
+  title: Benign pickle referencing builtins.set passes
+  kind: positive
+  controls:
+  - C-ARTIFACT
+  threats:
+  - TH-14
+  identity: support-agent-01
+  steps:
+  - request:
+      endpoint: artifact_scan
+      artifact:
+        generator: pickle_builtins_set_benign
+    expect:
+      status: 200

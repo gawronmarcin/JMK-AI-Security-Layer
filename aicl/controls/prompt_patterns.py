@@ -14,7 +14,7 @@ from typing import Any
 
 from aicl import feeds
 from aicl.feeds import Signature
-from aicl.models import Action, Decision, Match, Origin, RequestContext, Stage
+from aicl.models import Action, Decision, Match, Origin, RequestContext, Severity, Stage
 from aicl.registry import register_control
 
 _FALLBACK_SIGNATURES: tuple[Signature, ...] = (
@@ -66,6 +66,9 @@ _FALLBACK_SIGNATURES: tuple[Signature, ...] = (
 )
 
 
+_SEVERITY_NAMES: dict[int, Severity] = {1: "low", 2: "medium", 3: "high", 4: "critical"}
+
+
 def _cfg_val(cfg: Any, key: str, default: Any = None) -> Any:
     if hasattr(cfg, "get"):
         return cfg.get(key, default)
@@ -89,7 +92,7 @@ class InjectionPatternsControl:
         target_action = Action(_cfg_val(cfg, "action", Action.block))
         cfg_threats = list(_cfg_val(cfg, "threat_ids", ["TH-01", "TH-02"]))
 
-        active_signatures = []
+        active_signatures: list[Signature] = []
         for s_set in sig_sets:
             active_signatures.extend(snap.for_set(s_set))
 
@@ -154,14 +157,11 @@ class InjectionPatternsControl:
         final_risk = min(accumulated_risk, 1.0) if matches else 0.0
 
         final_action = Action.allow
-        severity_str = "low"
+        severity_str: Severity = "low"
 
         if matches and highest_severity_val >= min_severity_val:
             final_action = target_action
-            for k, v in severity_map.items():
-                if v == highest_severity_val:
-                    severity_str = k
-                    break
+            severity_str = _SEVERITY_NAMES.get(highest_severity_val, "low")
 
         # Distinguish direct (TH-01) vs indirect (TH-02) injection by origin
         if "TH-01" in cfg_threats or "TH-02" in cfg_threats:

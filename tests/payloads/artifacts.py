@@ -20,7 +20,7 @@ import pickle
 import struct
 import tarfile
 import zipfile
-from typing import Callable
+from collections.abc import Callable
 
 CMD = "echo AICL-TEST-ONLY"   # komenda-atrapa; i tak nigdy nie zostanie uruchomiona
 
@@ -130,6 +130,36 @@ def empty_file(**_) -> tuple[bytes, str]:
     return b"", "empty.pkl"
 
 
+def pickle_memo_stack_global(**_) -> tuple[bytes, str]:
+    """os.system via STACK_GLOBAL whose operands come from the memo (BINGET), with decoy
+    strings in between: defeats scanners that only look at the last two pushed strings."""
+    def push_memo_pop(s: str) -> bytes:  # push string, MEMOIZE, POP
+        return _short_unicode(s) + b"\x94" + b"0"
+    data = (b"\x80\x04" + push_memo_pop("os") + push_memo_pop("system")
+            + _short_unicode("collections") + b"0" + _short_unicode("OrderedDict") + b"0"
+            + b"h\x00" + b"h\x01" + b"\x93" + _short_unicode(CMD) + b"\x85" + b"R" + b".")
+    return data, "model.pkl"
+
+
+def pickle_builtins_set_benign(**_) -> tuple[bytes, str]:
+    """Benign pickle that references builtins (protocol 2 pickles a set as __builtin__.set)."""
+    return pickle.dumps({"labels": {1, 2, 3}, "shape": (2, 2)}, protocol=2), "model.pkl"
+
+
+def zip_entry_without_extension_malicious(**_) -> tuple[bytes, str]:
+    """Malicious pickle stored under a name without .pkl: scanners must look at content."""
+    return _zip({"archive/data": pickle_os_system_p4()[0], "archive/version": b"3\n"}), "model.pt"
+
+
+def zip_bomb(**_) -> tuple[bytes, str]:
+    """Small archive that expands to tens of MB of zeros (decompression bomb)."""
+    return _zip({"archive/data.bin": b"\x00" * (32 * 1024 * 1024)}), "model.pt"
+
+
+def zip_path_traversal(**_) -> tuple[bytes, str]:
+    return _zip({"../../etc/cron.d/evil": pickle_benign()[0]}), "model.zip"
+
+
 GENERATORS: dict[str, Callable[..., tuple[bytes, str]]] = {
     f.__name__: f for f in (
         pickle_benign, pickle_os_system_p0, pickle_os_system_p4, pickle_posix_system,
@@ -137,6 +167,8 @@ GENERATORS: dict[str, Callable[..., tuple[bytes, str]]] = {
         pickle_broken_after_payload, pickle_truncated_benign,
         torch_like_zip_malicious, torch_like_zip_benign, nested_zip_malicious,
         tar_malicious, unknown_archive_7z, safetensors_benign, empty_file,
+        pickle_memo_stack_global, pickle_builtins_set_benign, zip_entry_without_extension_malicious,
+        zip_bomb, zip_path_traversal,
     )
 }
 

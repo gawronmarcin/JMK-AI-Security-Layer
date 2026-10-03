@@ -2,7 +2,7 @@
 # Externally managed: hot-reloaded, an invalid file keeps the last good version.
 # Bump feed_version on every change; it is recorded in each audit event.
 
-feed_version: "2026-10-03.1"
+feed_version: "2026-10-03.2"
 signatures:
   - id: SIG-PKL-001
     set: artifact                       # injection | artifact | code_exec | supply_chain | exfil
@@ -102,4 +102,123 @@ signatures:
     severity: high
     description: "Instruction override (Polish alternative)"
     refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  # --- Broader injection signatures (weighted, §4.2) -------------------------------------
+  # Matched against normalized text (casefolded, homoglyphs folded, zero-width removed) and
+  # decoded fragments (base64/hex/url/rot13/leetspeak). severity drives the outcome through
+  # each profile's min_severity:
+  #   high -> blocks in strict and balanced, flags in permissive
+  #   low  -> never blocks in balanced; raises ctx.risk so the semantic judge looks at it
+  # Overrides need an explicit qualifier (previous/prior/above/your/all ...) right before the
+  # noun and are skipped after a negation, so "don't ignore any of the safety instructions"
+  # or "ignore the typos in my previous message" do not match.
+  # Patterns are single-quoted: YAML leaves backslashes alone, a quote is written as ''.
+
+  - id: SIG-INJ-006
+    set: injection
+    kind: regex
+    pattern: '(?i)(?<!n''t )(?<!not )(?<!never )\b(ignore|disregard|forget|override|bypass|skip)\W+(?:(?:all|any|of|the|your|my|these|those|every)\W+){0,3}(?:previous|prior|above|earlier|preceding|former|original|initial|system|existing)\W+(?:\w+\W+)?(?:instructions?|rules?|prompts?|guidelines?|directives?|commands?|guardrails?|restrictions?|context)\b'
+    severity: high
+    description: "Instruction override with a qualifier (ignore your/all previous/prior/above instructions)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-007
+    set: injection
+    kind: regex
+    pattern: '(?i)(?<!n''t )(?<!not )(?<!never )\b(ignore|disregard|forget|override|bypass)\W+(?:all\W+(?:of\W+)?)?(?:your|all|any)\W+(?:instructions?|rules?|guidelines?|directives?|guardrails?|restrictions?|safety\W+(?:rules|guidelines|filters?))\b'
+    severity: high
+    description: "Instruction override without qualifier (ignore your instructions, bypass all restrictions)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-008
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(ignore|disregard|forget)\W+(?:everything|all|anything)\W+(?:you\W+(?:were|have\W+been)\W+(?:told|given)|(?:said|written|stated)\W+(?:above|before|earlier)|above|before|so\W+far)\b'
+    severity: high
+    description: "Discard everything said before (disregard everything you were told)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-009
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(reveal|show|print|repeat|output|leak|display|tell\W+me|give\W+me|dump|expose|write\W+out)\W+(?:\w+\W+){0,3}?(?:your|the)\W+(?:(?:system|hidden|secret|initial|original|full)\W+(?:prompt|instructions|message)|prompt\W+(?:above|before)|instructions\W+(?:above|you\W+were\W+given))\b'
+    severity: high
+    description: "System prompt extraction (print/tell me your system prompt)"
+    refs: ["OWASP LLM07:2025", "AML.T0056"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-010
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(zignoruj|ignoruj|pomiń|pomin|zapomnij|nie\W+stosuj\W+się\W+do|nie\W+słuchaj)\W+(?:\w+\W+){0,2}?(?:poprzedni\w*|wcześniejsz\w*|wczesniejsz\w*|wszystki\w*|swoich|swoje|twoich|twoje|powyższ\w*)\W+(?:\w+\W+)?(?:instrukcj\w*|polece\w*|reguł\w*|regul\w*|zasad\w*|wytyczn\w*)'
+    severity: high
+    description: "Instruction override (Polish, verb and noun variants)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-011
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(pokaż|pokaz|wypisz|powtórz|powtorz|ujawnij|podaj|wyświetl|wyswietl|zdradź|zdradz)\W+(?:\w+\W+){0,2}?(?:(?:swój|swoj|twój|twoj)\W+(?:\w+\W+)?prompt|prompt\W+systemowy|instrukcj\w*\W+systemow\w*|swoje\W+instrukcje|ukryt\w*\W+instrukcj\w*)'
+    severity: high
+    description: "System prompt extraction (Polish)"
+    refs: ["OWASP LLM07:2025", "AML.T0056"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-012
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(do\W+anything\W+now|dan\W+mode|developer\W+mode\W+(?:enabled|on)|jailbreak\W+mode|you\W+are\W+now\W+(?:dan|unfiltered|unrestricted|uncensored|jailbroken))\b'
+    severity: high
+    description: "Known jailbreak personas (DAN, developer mode)"
+    refs: ["OWASP LLM01:2025", "AML.T0054"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-013
+    set: injection
+    kind: regex
+    pattern: '(?i)(<\|?(?:system|im_start|im_end|endoftext|assistant)\|?>|\[/?inst\]|<<\s*sys\s*>>|(?:^|\W)###\s*(?:system|instruction)\b)'
+    severity: high
+    description: "Fake chat-template delimiters smuggled into user content"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-014
+    set: injection
+    kind: regex
+    pattern: '(?i)!\[[^\]]*\]\(\s*https?://[^)\s]*\{[^)]*\}[^)]*\)'
+    severity: high
+    description: "Markdown image exfiltration template (data placed into an image URL)"
+    refs: ["OWASP LLM02:2025", "AML.T0057"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-015
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(you\W+are\W+now|from\W+now\W+on\W+you\W+are|act\W+as|pretend\W+(?:to\W+be|you\W+are)|roleplay\W+as|od\W+teraz\W+jesteś|udawaj,?\W+że|wciel\W+się\W+w)\b'
+    severity: low
+    description: "Role hijack phrasing (grey zone: raises risk, the judge decides)"
+    refs: ["OWASP LLM01:2025", "AML.T0054"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-016
+    set: injection
+    kind: regex
+    pattern: '(?i)(\b(base64|rot13|hex|morse)\b.{0,40}\b(decode|decrypt|execute|follow|run)\b|\b(decode|decrypt)\b.{0,20}\b(and|then)\W+(follow|execute|run|obey)\b)'
+    severity: low
+    description: "Request to decode and follow an encoded payload (grey zone)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-017
+    set: injection
+    kind: regex
+    pattern: '(?i)\b(i\W+am\W+(?:the|your)\W+(?:developer|admin|administrator|owner|creator)|this\W+is\W+(?:an?\W+)?(?:authorized|official)\W+(?:test|audit|override)|admin\W+override)\b'
+    severity: low
+    description: "Authority claim used to justify an override (grey zone)"
+    refs: ["OWASP LLM01:2025"]
     added: "2026-10-03"

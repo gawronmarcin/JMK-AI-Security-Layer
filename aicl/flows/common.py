@@ -128,18 +128,20 @@ class RequestRecord:
         self.profile = self.policy.profile_for(self.identity)
         return self.identity
 
-    async def read_body(self, reader: BodyReader) -> bytes:
-        """Read the body, enforcing C-SIZE `max_body_bytes` before anything parses it (TH-20).
+    async def read_body(self, reader: BodyReader, limit_key: str = "max_body_bytes", slack: int = 0) -> bytes:
+        """Read the body, enforcing a C-SIZE limit before anything parses it (TH-20).
 
+        `limit_key` names the C-SIZE param (`max_body_bytes`, or `max_artifact_bytes` for
+        uploads); `slack` allows for framing around the payload (multipart boundaries).
         Runs after authentication (headers only), so an anonymous caller cannot make the
         gateway read a large body. The policy's action and mode for C-SIZE apply as usual.
         """
         assert self.profile is not None
         cfg = self.policy.level_config(SIZE_CONTROL_ID, self.profile)
-        limit = cfg.get("max_body_bytes") if cfg is not None else None
+        limit = cfg.get(limit_key) if cfg is not None else None
         if cfg is None or limit is None:
             return await reader(None)
-        limit = int(limit)
+        limit = int(limit) + slack
         # A size violation cannot be redacted, so redact behaves like block (as in the engine).
         stops = cfg.mode == "enforce" and cfg.action not in (Action.allow, Action.flag)
         try:

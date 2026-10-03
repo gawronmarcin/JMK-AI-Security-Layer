@@ -210,9 +210,12 @@ controls:
     threat_ids: [TH-14]
     enabled: true
     stages: [artifact]
-    params: {dangerous_globals_from_feed: true, reject_unparseable: true}
+    # Unsafe content (dangerous globals, bad archives, unparseable files) -> action.
+    # Warnings (raw pickle, unknown globals, extension mismatch) -> flag, or action with block_on_warn.
+    params: {dangerous_globals_from_feed: true, reject_unparseable: true,
+             max_archive_entries: 2000, max_unpacked_bytes: 536870912}
     levels:
-      strict:     {action: block}
+      strict:     {action: block, block_on_warn: true}
       balanced:   {action: block}
       permissive: {action: flag}
 

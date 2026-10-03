@@ -1,19 +1,24 @@
-"""Flow for POST /v1/artifacts/scan (ARCHITECTURE.md §2, §5.1).
+"""POST /v1/artifacts/scan (§1.2, §5.1):
 
-Contract notes:
-- Stages: ingress → artifact → post
-- Supports multipart/form-data upload (file parameter) and raw octet-stream upload
-- Authenticates identity using Bearer token (C-AUTH)
-- Applies ingress stage limits (e.g. C-SIZE)
-- Applies Stage.artifact controls (C-ARTIFACT)
-- Returns 200 on clean artifacts, 403 on blocked artifacts with standard error format
+    C-AUTH -> read upload (limited) -> ingress -> artifact -> post
+
+Upload: multipart/form-data with a `file` part (default of the test harness), or the raw
+bytes with an optional `X-AICL-Filename` header. Both paths read the body through the same
+limit, C-SIZE `max_artifact_bytes`, before anything parses it; multipart is then parsed
+from that buffer.
+
+The verdict in a 200 response reflects the final action: `clean` (allow) or `flagged`
+(warnings such as a raw pickle format, unknown globals or an extension mismatch).
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
+from typing import Any
 
 from fastapi import Request
+from starlette.datastructures import UploadFile
 
 from aicl.engine import run_stage
 from aicl.errors import GatewayError
@@ -24,8 +29,11 @@ from aicl.flows.common import (
     account_usage,
     stop_if_blocked,
 )
-from aicl.models import Origin, RequestContext, Segment, Stage
+from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage
 from aicl.runtime import Runtime
+
+ARTIFACT_CONTROL_ID = "C-ARTIFACT"
+MULTIPART_SLACK = 64 * 1024  # boundaries and part headers around the file
 
 
 async def handle_artifact_scan(
@@ -40,6 +48,27 @@ async def handle_artifact_scan(
         await account_usage(rt, rec)
 
 
+async def _read_upload(
+    rec: RequestRecord, request: Request, read_body: BodyReader, headers: Mapping[str, str]
+) -> tuple[bytes, str]:
+    if not headers.get("content-type", "").startswith("multipart/form-data"):
+        data = await rec.read_body(read_body, "max_artifact_bytes")
+        return data, headers.get("x-aicl-filename", "artifact.bin")
+
+    body = await rec.read_body(read_body, "max_artifact_bytes", slack=MULTIPART_SLACK)
+
+    async def replay() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    form = await Request(request.scope, replay).form(max_files=1, max_fields=10)
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        upload = next((v for v in form.values() if isinstance(v, UploadFile)), None)
+    if upload is None:
+        raise GatewayError(ErrorType.bad_request, "multipart upload without a file part")
+    return await upload.read(), upload.filename or "artifact.bin"
+
+
 async def _run(
     rt: Runtime,
     rec: RequestRecord,
@@ -50,27 +79,7 @@ async def _run(
     policy = rec.policy
     identity = rec.authenticate()
     assert rec.profile is not None
-
-    content_type = headers.get("content-type", "")
-    data: bytes = b""
-    filename: str = ""
-    if content_type.startswith("multipart/form-data"):
-        form = await request.form()
-        upload = form.get("file")
-        if not hasattr(upload, "read"):
-            for v in form.values():
-                if hasattr(v, "read"):
-                    upload = v
-                    break
-        if hasattr(upload, "read"):
-            data = await upload.read()
-            filename = getattr(upload, "filename", None) or "artifact.bin"
-        else:
-            data = b""
-            filename = "artifact.bin"
-    else:
-        data = await rec.read_body(read_body)
-        filename = headers.get("x-aicl-filename", "artifact.bin")
+    data, filename = await _read_upload(rec, request, read_body, headers)
 
     ctx = RequestContext(
         request_id=rec.request_id,
@@ -86,7 +95,6 @@ async def _run(
                 idx=0,
                 text=filename,
                 norm=filename.casefold(),
-                decoded=[],
                 origin=Origin.artifact,
                 trust="untrusted",
                 meta={"filename": filename, "size": len(data)},
@@ -96,23 +104,22 @@ async def _run(
         policy_version=policy.version,
     )
 
-    # Ingress stage (size limits, etc.)
     stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)))
-
-    # Artifact stage (C-ARTIFACT)
     art_ctx = ctx.model_copy(update={"stage": Stage.artifact})
-    result = rec.add_stage(await run_stage(policy, art_ctx, Stage.artifact, rt.controls))
-    stop_if_blocked(result)
+    stop_if_blocked(rec.add_stage(await run_stage(policy, art_ctx, Stage.artifact, rt.controls)))
 
     final = rec.final_action()
     rec.emit(final)
+    findings = [m.kind for d in rec.decisions() if d.control_id == ARTIFACT_CONTROL_ID for m in d.matches]
     return FlowResponse(
         status=200,
         body={
-            "status": "allowed",
-            "verdict": "clean",
+            "verdict": "clean" if final == Action.allow else "flagged",
+            "action": final.value,
             "filename": filename,
             "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "findings": sorted(set(findings)),
         },
         headers=rec.response_headers(final),
     )

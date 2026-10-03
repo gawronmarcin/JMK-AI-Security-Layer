@@ -1,7 +1,7 @@
 """Text normalization done once per segment, before controls run (ARCHITECTURE.md §5.2).
 
 norm    = NFKC -> strip invisible chars -> collapse whitespace -> casefold -> fold homoglyphs
-decoded = text recovered from base64 / hex / URL-encoding / rot13 fragments,
+decoded = text recovered from base64 / hex / URL-encoding / rot13 / leetspeak fragments,
           bounded (depth <= 2, <= 16 KB total), NOT casefolded (secrets are case-sensitive)
 """
 
@@ -155,6 +155,19 @@ def _rot13(text: str) -> str | None:
     return rotated if after >= 2 and after > before else None
 
 
+_LEET = str.maketrans("0134578@$", "oieastbas")
+_LEET_WORD_RE = re.compile(r"\b(?=\w*[A-Za-z])(?=\w*[0134578])[A-Za-z0134578]{3,}\b")
+
+
+def _deleet(text: str) -> str | None:
+    """'1gn0r3 all pr3v10us' -> 'ignore all previous'. Only when at least two words mix
+    letters with look-alike digits, so ordinary numbers and ids are left alone."""
+    if len(_LEET_WORD_RE.findall(text)) < 2:
+        return None
+    out = _LEET_WORD_RE.sub(lambda m: m.group().translate(_LEET), text)
+    return out if out != text else None
+
+
 def _decode_once(text: str) -> list[str]:
     out: list[str] = []
     for m in _B64_RE.finditer(text):
@@ -169,6 +182,8 @@ def _decode_once(text: str) -> list[str]:
         if unq != text:
             out.append(unq)
     if (s := _rot13(text)) is not None:
+        out.append(s)
+    if (s := _deleet(text)) is not None:
         out.append(s)
     return out
 

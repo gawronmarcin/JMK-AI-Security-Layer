@@ -93,7 +93,7 @@ async def test_clean_request_passes_through(gw):
     e = await gw.request_event(r)
     assert e.identity == "support-agent-01" and e.role == "support_agent" and e.profile == "balanced"
     assert e.final_action == Action.allow and e.upstream_called
-    assert e.feed_version == "2026-10-03.1"
+    assert e.feed_version == "2026-10-03.2"
     assert e.usage.prompt_tokens == 100 and e.usage.cost_usd == pytest.approx(0.000125)
     assert {d.control_id for d in e.decisions} >= {"C-PII-IN", "C-PII-OUT"}
 
@@ -302,7 +302,7 @@ async def test_startup_events(gw):
     assert started.detail["reason"] == "startup"
     assert started.detail["missing_controls"] == []
     feed = next(e for e in events if e.type == "feed.reloaded")
-    assert feed.detail["status"] == "loaded" and feed.feed_version == "2026-10-03.1"
+    assert feed.detail["status"] == "loaded" and feed.feed_version == "2026-10-03.2"
 
 
 async def test_healthz(gw):
@@ -310,7 +310,7 @@ async def test_healthz(gw):
     assert r.json() == {
         "status": "ok",
         "policy_version": gw.app.state.runtime.policy.version,
-        "feed_version": "2026-10-03.1",
+        "feed_version": "2026-10-03.2",
     }
 
 
