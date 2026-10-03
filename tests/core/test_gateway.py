@@ -300,7 +300,7 @@ async def test_startup_events(gw):
     events = await gw.events()
     started = next(e for e in events if e.type == "policy.reloaded")
     assert started.detail["reason"] == "startup"
-    assert "C-INJ-PAT" in started.detail["missing_controls"]
+    assert "C-ARTIFACT" in started.detail["missing_controls"]
     feed = next(e for e in events if e.type == "feed.reloaded")
     assert feed.detail["status"] == "loaded" and feed.feed_version == "2026-10-03.1"
 

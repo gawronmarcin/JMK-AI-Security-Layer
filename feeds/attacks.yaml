@@ -12,3 +12,48 @@ signatures:
     description: "Pickle GLOBAL calling os.system (arbitrary command execution on load)"
     refs: ["ATLAS: AI supply chain compromise", "OWASP LLM03"]
     added: "2026-10-03"
+
+  - id: SIG-INJ-001
+    set: injection
+    kind: regex
+    pattern: "(?i)ignore (all )?previous instructions"
+    severity: high
+    description: "Direct/indirect instruction override (English)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-002
+    set: injection
+    kind: regex
+    pattern: "(?i)zignoruj (wszystkie )?poprzednie instrukcje"
+    severity: high
+    description: "Direct/indirect instruction override (Polish)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-003
+    set: injection
+    kind: regex
+    pattern: "(?i)disregard (your |all )?previous instructions"
+    severity: high
+    description: "Instruction override via disregard"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-004
+    set: injection
+    kind: regex
+    pattern: "(?i)system override:"
+    severity: high
+    description: "System override directive"
+    refs: ["OWASP LLM01:2025", "AML.T0051.001"]
+    added: "2026-10-03"
+
+  - id: SIG-INJ-005
+    set: injection
+    kind: regex
+    pattern: "(?i)nie stosuj się do poprzednich instrukcji"
+    severity: high
+    description: "Instruction override (Polish alternative)"
+    refs: ["OWASP LLM01:2025", "AML.T0051.000"]
+    added: "2026-10-03"
