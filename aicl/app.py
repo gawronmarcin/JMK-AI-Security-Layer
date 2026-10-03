@@ -130,7 +130,7 @@ def create_app(
     async def dashboard_redirect() -> Response:
         return RedirectResponse("/dashboard/")
 
-    app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+    app.mount("/dashboard", _RevalidatedStaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
@@ -148,6 +148,16 @@ def create_app(
         return _respond(flow)
 
     return app
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """Dashboard files with `Cache-Control: no-cache`: browsers revalidate (cheap, ETag) instead of
+    running stale JS modules after an update."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _body_reader(request: Request) -> BodyReader:

@@ -2,7 +2,7 @@
 // updated in place (datasets matched by `id`), so auto-refresh never re-creates charts and
 // series hidden via the legend stay hidden.
 
-import { COLORS, el, fmtInt, fmtMs, fmtPct, fmtUtc, fmtDate, fmtTime } from './utils.js';
+import { COLORS, el, fmtInt, fmtMs, fmtPct, fmtUtc, fmtTime } from './utils.js';
 
 const registry = new Map(); // canvas -> Chart
 const reducedMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -18,7 +18,12 @@ export function setupChartDefaults() {
   C.defaults.borderColor = 'rgba(38,50,65,0.9)';
   C.defaults.font.family = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   C.defaults.font.size = 12;
-  C.defaults.animation = reducedMotion() ? false : { duration: 250 };
+  // Set the duration on the existing object, never replace it: Chart.js builds each animation's
+  // config only from the keys present in defaults.animation, so `{duration: 250}` drops `type`
+  // and every colour transition (hover) gets no interpolator ("this._fn is not a function"),
+  // which kills the shared animation loop and freezes all charts.
+  if (reducedMotion()) C.defaults.animation = false;
+  else C.defaults.animation.duration = 250;
   C.defaults.plugins.legend.labels.usePointStyle = true;
   C.defaults.plugins.legend.labels.boxHeight = 8;
   C.defaults.plugins.legend.labels.color = COLORS.text;
@@ -140,12 +145,24 @@ export function destroyChart(canvas) {
 }
 
 /** Click helper → handler({datasetIndex, index, dataset, label}). Uses nearest element on the x axis. */
-export function clickHandler(handler, mode = 'nearest') {
+/**
+ * Chart click → handler({datasetIndex, index, dataset, label, meta}).
+ * `columnFallback`: a click that hits no element (empty space above a stacked bar, a thin
+ * segment, the gap around a line point) still selects the whole column, with `dataset`
+ * null. Time charts use it so a click works wherever the hover tooltip and pointer cursor
+ * (index mode, intersect: false) suggest it does.
+ */
+export function clickHandler(handler, mode = 'nearest', { columnFallback = false } = {}) {
   return (evt, _els, chart) => {
-    const hits = chart.getElementsAtEventForMode(evt, mode, { intersect: mode === 'nearest' ? true : false }, true);
+    let hits = chart.getElementsAtEventForMode(evt, mode, { intersect: mode === 'nearest' }, true);
+    let dataset = hits.length ? chart.data.datasets[hits[0].datasetIndex] : null;
+    if (!hits.length && columnFallback) {
+      hits = chart.getElementsAtEventForMode(evt, 'index', { intersect: false }, true);
+      dataset = null;
+    }
     if (!hits.length) return;
     const { datasetIndex, index } = hits[0];
-    handler({ datasetIndex, index, chart, dataset: chart.data.datasets[datasetIndex], label: chart.data.labels[index], meta: chart.data.meta ? chart.data.meta[index] : undefined });
+    handler({ datasetIndex, index, chart, dataset, label: chart.data.labels[index], meta: chart.data.meta ? chart.data.meta[index] : undefined });
   };
 }
 
@@ -158,7 +175,18 @@ export function hoverCursor(evt, els) {
 
 const gridStyle = () => ({ color: 'rgba(38,50,65,0.6)' });
 
-export function timeAxisOptions({ stacked = false, percent = false, onClick = null, bucketMs = 60000, utcTitle = true } = {}) {
+const rawValue = (item) => (item.dataset.rawCounts ? item.dataset.rawCounts[item.dataIndex] : item.parsed.y);
+
+/** Put the tooltip beside the hovered column (right of it, left near the right edge) so it never
+ *  covers the bars being inspected. */
+const besideColumn = (ctx) => {
+  const x = ctx.tooltipItems?.[0]?.element?.x;
+  const area = ctx.chart.chartArea;
+  if (x === undefined || !area) return undefined;
+  return x > area.left + area.width * 0.6 ? 'right' : 'left';
+};
+
+export function timeAxisOptions({ stacked = false, percent = false, onClick = null, bucketMs = 60000, utcTitle = false } = {}) {
   return {
     interaction: { mode: 'index', intersect: false },
     onClick,
@@ -174,15 +202,28 @@ export function timeAxisOptions({ stacked = false, percent = false, onClick = nu
     plugins: {
       legend: { position: 'bottom' },
       tooltip: {
+        // compact: only series present in the bucket, one-line title, total in the footer
+        position: 'nearest',
+        xAlign: besideColumn,
+        yAlign: 'center',
+        caretPadding: 8,
+        padding: 8,
+        bodySpacing: 2,
+        boxPadding: 3,
+        filter: (item) => rawValue(item) > 0,
         callbacks: {
           title: (items) => {
             const d = items[0]?.chart?.data?.meta?.[items[0].dataIndex];
             if (!d) return items[0]?.label || '';
-            return [`${fmtDate(d.t)} – ${fmtTime(d.end)}`, utcTitle ? `UTC ${fmtUtc(d.t)}` : ''].filter(Boolean);
+            return `${fmtTime(d.t)}–${fmtTime(d.end)}${utcTitle ? `  (UTC ${fmtUtc(d.t)})` : ''}`;
           },
           label: (item) => {
-            const raw = item.dataset.rawCounts ? item.dataset.rawCounts[item.dataIndex] : item.parsed.y;
-            return percent ? ` ${item.dataset.label}: ${fmtPct(item.parsed.y / 100)} (${fmtInt(raw)})` : ` ${item.dataset.label}: ${fmtInt(item.parsed.y)}`;
+            const raw = rawValue(item);
+            return percent ? ` ${item.dataset.label}: ${fmtPct(item.parsed.y / 100)} (${fmtInt(raw)})` : ` ${item.dataset.label}: ${fmtInt(raw)}`;
+          },
+          footer: (items) => {
+            if (items.length < 2) return '';
+            return `Total: ${fmtInt(items.reduce((s, i) => s + (Number(rawValue(i)) || 0), 0))}`;
           },
         },
       },

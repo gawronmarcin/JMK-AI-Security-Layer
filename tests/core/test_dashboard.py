@@ -26,7 +26,9 @@ async def test_dashboard_is_served_as_static_app(gw):
         js = await gw.client.get(f"/dashboard/{path}")
         assert js.status_code == 200, path
         assert "javascript" in js.headers["content-type"], (path, js.headers["content-type"])
-    assert (await gw.client.get("/dashboard/styles.css")).headers["content-type"].startswith("text/css")
+    css = await gw.client.get("/dashboard/styles.css")
+    assert css.headers["content-type"].startswith("text/css")
+    assert css.headers["cache-control"] == "no-cache"  # no stale JS/CSS after an update
 
 
 async def test_dashboard_files_need_no_key_but_data_does(gw):

@@ -108,7 +108,7 @@ export function createThreats(ctx) {
         labels: meta.map((m) => fmtTime(m.t)),
         meta,
         datasets: top.map((t, i) => ({ id: t, label: t, data: counts[t], borderColor: TREND_COLORS[i], backgroundColor: alpha(TREND_COLORS[i], 0.1), pointStyle: ['circle', 'triangle', 'rect', 'rectRot', 'crossRot', 'star'][i], pointRadius: n > 60 ? 0 : 2, borderDash: i % 2 ? [5, 3] : [], borderWidth: 1.6, tension: 0 })),
-        options: timeAxisOptions({ onClick: clickHandler(({ meta: m, dataset }) => { if (m) ctx.filterEvents({ threat: dataset?.id || '', range: 'custom', from: m.t.toISOString(), to: m.end.toISOString() }); }, 'nearest') }),
+        options: timeAxisOptions({ onClick: clickHandler(({ meta: m, dataset }) => { if (m) ctx.filterEvents({ threat: dataset?.id || '', range: 'custom', from: m.t.toISOString(), to: m.end.toISOString() }); }, 'nearest', { columnFallback: true }) }),
       });
       trendPanel.setSource(`${srcEv} · bucket ${fmtBucket(size)}`);
       trendPanel.setAlt(dataTableAlt('Detections over time — data table', ['Bucket start', ...top], meta.map((m, i) => [m.t.toLocaleString(), ...top.map((t) => fmtInt(counts[t][i]))]).filter((r) => r.slice(1).some((v) => v !== '0'))));

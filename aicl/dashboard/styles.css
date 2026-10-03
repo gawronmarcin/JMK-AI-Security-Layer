@@ -90,6 +90,7 @@ textarea.yaml { width: 100%; font-family: var(--mono); font-size: 12.5px; line-h
 .seg-btn:last-child { border-right: 0; }
 .seg-btn:hover { color: var(--text); }
 .seg-btn[aria-pressed="true"] { background: #1d3550; color: var(--text); box-shadow: inset 0 -2px 0 var(--info); }
+.seg-sm .seg-btn { padding: 3px 9px; font-size: 12px; }
 
 /* ------------------------------------------------------------------ demo ribbon */
 .demo-ribbon {

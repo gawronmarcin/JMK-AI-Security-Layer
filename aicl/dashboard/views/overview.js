@@ -28,10 +28,11 @@ export function createOverview(ctx) {
   let lastSig = '';
   let seriesBuckets = [];
 
-  const modeToggle = el('div', { class: 'seg', role: 'group', 'aria-label': 'Value mode' },
+  // Applies to the "Security actions over time" chart only, so it lives in that panel's header.
+  const modeToggle = el('div', { class: 'seg seg-sm', role: 'group', 'aria-label': 'Chart values: absolute or share of requests' },
     el('button', { type: 'button', class: 'seg-btn', 'data-mode': 'abs', 'aria-pressed': 'true', text: 'Absolute', onClick: () => ctx.store.setUi({ seriesMode: 'abs' }) }),
     el('button', { type: 'button', class: 'seg-btn', 'data-mode': 'pct', 'aria-pressed': 'false', text: 'Share %', onClick: () => ctx.store.setUi({ seriesMode: 'pct' }) }));
-  const toolbar = createRangeToolbar(ctx, { extra: modeToggle });
+  const toolbar = createRangeToolbar(ctx);
 
   const kpiGrid = el('div', { class: 'kpi-grid', role: 'list' });
   for (const k of KPIS) {
@@ -43,7 +44,7 @@ export function createOverview(ctx) {
   const kpiNote = el('p', { class: 'kpi-note muted' });
 
   // --- Security actions over time
-  const timePanel = createPanel({ title: 'Security actions over time', desc: 'Final action of each request per time bucket. Click a point to open the audit events of that action and bucket; click a legend entry to hide a series.', unit: 'requests', span: 8 });
+  const timePanel = createPanel({ title: 'Security actions over time', desc: 'Final action of each request per time bucket. Absolute shows request counts; Share % shows each action as a share of the requests in that bucket (useful when traffic volume varies; noisy with few requests). Click a coloured segment to open the audit events of that action and bucket, or anywhere else in the column for all events of the bucket; click a legend entry to hide a series.', unit: 'requests', span: 8, headerExtra: modeToggle });
   const timeChart = chartBox('Security actions over time', { height: 320 });
   timePanel.content.appendChild(timeChart.box);
 
@@ -187,7 +188,7 @@ export function createOverview(ctx) {
             const patch = { range: 'custom', from: b.t.toISOString(), to: b.end.toISOString() };
             if (dataset && ACTIONS.includes(dataset.id)) patch.action = dataset.id;
             ctx.filterEvents(patch);
-          }, 'nearest'),
+          }, 'nearest', { columnFallback: true }),
         }),
         live: { 'scales.y.max': pct ? 100 : undefined, 'scales.y.title.text': pct ? 'Share of requests (%)' : 'Requests' },
       });
