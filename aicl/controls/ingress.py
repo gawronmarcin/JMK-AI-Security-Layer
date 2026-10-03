@@ -8,14 +8,18 @@ Contract notes (ARCHITECTURE.md v0.2):
   - Controls are pure: return a Decision, never mutate ctx, never log.
   - Stage: ingress
   - C-MODEL-ALLOW checks if the model requested in ctx is permitted for ctx.role according to policy roles.
-  - C-SIZE validates input segments and artifacts against size limit parameters (max_body_bytes, max_messages, max_chars_per_message, max_artifact_bytes).
+  - C-SIZE validates input segments and artifacts against size limit parameters
+    (max_messages, max_chars_per_message, max_artifact_bytes).
+  - `max_body_bytes` belongs to C-SIZE in the policy but is enforced by the flow while reading
+    the body, before any parsing (aicl/flows/common.py RequestRecord.read_body): a control only
+    runs after the whole body has been read, which is too late to protect against oversized input.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from aicl.models import Action, Decision, Match, RequestContext, Severity, Stage
+from aicl.models import Action, Decision, Match, RequestContext, Stage
 from aicl.registry import register_control
 
 
@@ -44,14 +48,13 @@ class ModelAllowlist:
         if not ctx.model:
             return Decision(control_id=self.id, threat_ids=threat_ids, action=Action.allow)
 
-        # Access policy through cfg.policy if attached
-        policy = getattr(cfg, "policy", None)
-        if policy is not None:
-            # Check if role permits this model
-            allowed = policy.role_allows_model(ctx.role, ctx.model)
-        else:
-            # Fallback when policy is not attached to cfg (e.g. standalone test)
-            allowed = True
+        # Access policy through cfg.policy. Without it the role's models are unknown:
+        # fail closed rather than let every model through.
+        try:
+            policy = cfg.policy
+        except (AttributeError, AssertionError):
+            policy = None
+        allowed = policy is not None and policy.role_allows_model(ctx.role, ctx.model)
 
         if not allowed:
             return Decision(
@@ -81,7 +84,6 @@ class SizeLimits:
 
         max_messages = _cfg(cfg, "max_messages")
         max_chars_per_message = _cfg(cfg, "max_chars_per_message")
-        max_body_bytes = _cfg(cfg, "max_body_bytes")
         max_artifact_bytes = _cfg(cfg, "max_artifact_bytes")
 
         # 1. Check message count limit
@@ -115,29 +117,7 @@ class SizeLimits:
                         ],
                     )
 
-        # 3. Check total body bytes (sum of text UTF-8 bytes in segments or raw_body_bytes in segment meta)
-        if max_body_bytes is not None:
-            limit = int(max_body_bytes)
-            # Check if any segment has raw_body_bytes metadata or sum text bytes
-            body_bytes = None
-            for seg in ctx.segments:
-                if "raw_body_bytes" in seg.meta:
-                    body_bytes = seg.meta["raw_body_bytes"]
-                    break
-            if body_bytes is None:
-                body_bytes = sum(len(seg.text.encode("utf-8")) for seg in ctx.segments)
-
-            if body_bytes > limit:
-                return Decision(
-                    control_id=self.id,
-                    threat_ids=threat_ids,
-                    action=action,
-                    severity="medium",
-                    reason=f"request body size {body_bytes} bytes exceeds limit of {limit}",
-                    matches=[Match(kind="body_size_limit", masked=f"{body_bytes} bytes")],
-                )
-
-        # 4. Check artifact byte limit if artifact is present
+        # 3. Check artifact byte limit if artifact is present
         if ctx.artifact is not None and max_artifact_bytes is not None:
             limit = int(max_artifact_bytes)
             artifact_size = len(ctx.artifact)

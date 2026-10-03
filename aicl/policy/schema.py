@@ -248,10 +248,13 @@ class ControlLevelConfig(BaseModel):
 
     Control-specific settings (`params` merged with the level, level wins) are extra
     attributes: `cfg.threshold`, or `cfg.get("threshold", 0.7)` when optional.
+    `cfg.get` also returns the envelope fields (`cfg.get("action")`).
     `cfg.policy` gives read access to the whole compiled policy (roles, tools, budgets).
+
+    Frozen: the compiled policy is shared by all requests, so nothing may change it at runtime.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", frozen=True)
 
     control_key: str
     control_id: str
@@ -263,6 +266,8 @@ class ControlLevelConfig(BaseModel):
     _policy: CompiledPolicy | None = PrivateAttr(default=None)
 
     def get(self, name: str, default: Any = None) -> Any:
+        if name in type(self).model_fields:
+            return getattr(self, name)
         return (self.model_extra or {}).get(name, default)
 
     @property

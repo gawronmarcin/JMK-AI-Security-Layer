@@ -1,10 +1,11 @@
 """Tests for R1 ingress controls: C-MODEL-ALLOW and C-SIZE (§6.3, §7)."""
 
 import pytest
-from aicl.models import Action, RequestContext, Segment, Stage
+
+from aicl.controls.ingress import ModelAllowlist, SizeLimits
+from aicl.models import Action, RequestContext, Stage
 from aicl.normalize import build_segment
 from aicl.policy.loader import load_policy_file
-from aicl.controls.ingress import ModelAllowlist, SizeLimits
 from aicl.policy.schema import ControlLevelConfig
 
 
@@ -12,6 +13,7 @@ from aicl.policy.schema import ControlLevelConfig
 def policy(tmp_path):
     # Using default policy
     from pathlib import Path
+
     repo = Path(__file__).parents[2]
     return load_policy_file(
         repo / "policies" / "default.yaml",
@@ -144,7 +146,8 @@ async def test_size_limits_exceed_chars_per_message(policy):
 
 
 @pytest.mark.asyncio
-async def test_size_limits_exceed_body_bytes(policy):
+async def test_size_limits_leave_body_bytes_to_the_flow(policy):
+    # max_body_bytes is enforced while reading the body (see test_gateway), not by the control.
     ctrl = SizeLimits()
     cfg = ControlLevelConfig(
         control_key="size_limits",
@@ -153,14 +156,26 @@ async def test_size_limits_exceed_body_bytes(policy):
         action=Action.block,
         mode="enforce",
         on_error="fail_closed",
-        max_body_bytes=20,
+        max_body_bytes=1,
     )
-    seg = build_segment(0, "some message", "user", meta={"raw_body_bytes": 100})
-    ctx = _ctx(segments=[seg])
-    dec = await ctrl.evaluate(ctx, cfg)
-    assert dec.action == Action.block
-    assert dec.threat_ids == ["TH-20"]
-    assert "body size 100 bytes exceeds limit of 20" in dec.reason
+    dec = await ctrl.evaluate(_ctx(segments=[build_segment(0, "some message", "user")]), cfg)
+    assert dec.action == Action.allow
+
+
+@pytest.mark.asyncio
+async def test_model_allow_uses_policy_action_and_threats():
+    cfg = ControlLevelConfig(
+        control_key="model_allowlist",
+        control_id="C-MODEL-ALLOW",
+        threat_ids=["TH-99"],
+        action=Action.flag,
+        mode="enforce",
+        on_error="fail_closed",
+    )
+    # Not attached to a policy: role permissions are unknown, so the control fails closed
+    # with the configured action and threat ids.
+    dec = await ModelAllowlist().evaluate(_ctx(), cfg)
+    assert dec.action == Action.flag and dec.threat_ids == ["TH-99"]
 
 
 @pytest.mark.asyncio

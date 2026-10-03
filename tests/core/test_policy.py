@@ -103,3 +103,21 @@ def test_missing_key_env_is_a_warning_not_an_error():
 def test_shared_api_key_is_rejected():
     with pytest.raises(PolicyError, match="share the same API key"):
         parse_policy(DEFAULT.read_text(encoding="utf-8"), ENV | {"AICL_KEY_ADMIN": "k-support"})
+
+
+def test_cfg_get_returns_envelope_fields_and_params():
+    cfg = load_policy_file(DEFAULT, ENV).level_config("C-INJ-SEM", "permissive")
+    assert cfg.get("action") == Action.flag
+    assert cfg.get("threat_ids") == ["TH-01", "TH-02"]
+    assert cfg.get("threshold") == 0.85
+    assert cfg.get("missing", "default") == "default"
+
+
+def test_compiled_level_config_is_immutable():
+    from pydantic import ValidationError
+
+    cfg = load_policy_file(DEFAULT, ENV).level_config("C-PII-OUT", "balanced")
+    with pytest.raises(ValidationError):
+        cfg.action = Action.allow
+    with pytest.raises(ValidationError):
+        cfg.types = []

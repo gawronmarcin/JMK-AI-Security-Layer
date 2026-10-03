@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +18,7 @@ from aicl.models import (
     Endpoint,
     ErrorType,
     Latency,
+    Match,
     Profile,
     Usage,
     strongest_action,
@@ -28,6 +29,19 @@ from aicl.utils import new_id
 
 AUTH_CONTROL_ID = "C-AUTH"
 AUTH_THREATS = ["TH-08"]
+SIZE_CONTROL_ID = "C-SIZE"
+
+
+class BodyTooLarge(Exception):
+    """Raised by a BodyReader as soon as the body is known to exceed the limit."""
+
+    def __init__(self, size: int):
+        super().__init__(f"body exceeds limit ({size} bytes read or declared)")
+        self.size = size
+
+
+# Reads the request body; with a limit it stops early and raises BodyTooLarge.
+BodyReader = Callable[[int | None], Awaitable[bytes]]
 
 # Errors that are security outcomes carry a final action; the rest (bad request,
 # upstream failure) are recorded in the audit `error` field instead.
@@ -109,6 +123,33 @@ class RequestRecord:
         self.profile = self.policy.profile_for(self.identity)
         return self.identity
 
+    async def read_body(self, reader: BodyReader) -> bytes:
+        """Read the body, enforcing C-SIZE `max_body_bytes` before anything parses it (TH-20).
+
+        Runs after authentication (headers only), so an anonymous caller cannot make the
+        gateway read a large body. The policy's action and mode for C-SIZE apply as usual.
+        """
+        assert self.profile is not None
+        cfg = self.policy.level_config(SIZE_CONTROL_ID, self.profile)
+        limit = cfg.get("max_body_bytes") if cfg is not None else None
+        if cfg is None or limit is None:
+            return await reader(None)
+        limit = int(limit)
+        # A size violation cannot be redacted, so redact behaves like block (as in the engine).
+        stops = cfg.mode == "enforce" and cfg.action not in (Action.allow, Action.flag)
+        try:
+            body = await reader(limit if stops else None)
+        except BodyTooLarge as exc:
+            decision = _size_decision(cfg.threat_ids, cfg.action, exc.size, limit, shadow=False)
+            error = (
+                ErrorType.approval_required if cfg.action == Action.require_approval else ErrorType.blocked
+            )
+            raise GatewayError(error, f"blocked by {SIZE_CONTROL_ID}: {decision.reason}", decision) from exc
+        if len(body) > limit:  # flag, or shadow mode: record and continue
+            shadow = cfg.mode == "shadow" and cfg.action != Action.allow
+            self.extra_decisions.append(_size_decision(cfg.threat_ids, cfg.action, len(body), limit, shadow))
+        return body
+
     def add_stage(self, result: StageResult) -> StageResult:
         self.stages.append(result)
         self.errors += result.errors
@@ -118,11 +159,13 @@ class RequestRecord:
         return self.extra_decisions + [d for s in self.stages for d in s.decisions]
 
     def final_action(self) -> Action:
-        return strongest_action([s.action for s in self.stages])
+        extra = [d.action for d in self.extra_decisions if not d.shadow_suppressed and not d.skipped]
+        return strongest_action([s.action for s in self.stages] + extra)
 
     def would_have_action(self) -> Action | None:
         final = self.final_action()
         candidates = [s.would_have_action for s in self.stages if s.would_have_action is not None]
+        candidates += [d.action for d in self.extra_decisions if d.shadow_suppressed]
         strongest = strongest_action(candidates)
         return strongest if candidates and ACTION_PRECEDENCE[strongest] > ACTION_PRECEDENCE[final] else None
 
@@ -173,8 +216,8 @@ class RequestRecord:
 
     def fail(self, exc: GatewayError) -> FlowResponse:
         """Audit and answer an error. Blocks count as decisions; other errors are recorded as errors."""
-        if exc.decision is not None and exc.decision.control_id == AUTH_CONTROL_ID:
-            self.extra_decisions.append(exc.decision)
+        if exc.decision is not None and all(d is not exc.decision for d in self.decisions()):
+            self.extra_decisions.append(exc.decision)  # raised outside the engine (C-AUTH, body size)
         action = _ERROR_ACTION.get(exc.type)
         self.emit(action, error=None if action is not None else exc.message)
         return FlowResponse(
@@ -182,6 +225,18 @@ class RequestRecord:
             body=exc.body(self.request_id).model_dump(mode="json"),
             headers=self.response_headers(action),
         )
+
+
+def _size_decision(threat_ids: list[str], action: Action, size: int, limit: int, shadow: bool) -> Decision:
+    return Decision(
+        control_id=SIZE_CONTROL_ID,
+        threat_ids=list(threat_ids),
+        action=action,
+        severity="medium",
+        reason=f"request body of {size} bytes exceeds limit of {limit}",
+        matches=[Match(kind="body_size_limit", masked=f"{size} bytes")],
+        shadow_suppressed=shadow,
+    )
 
 
 def stop_if_blocked(result: StageResult) -> None:
