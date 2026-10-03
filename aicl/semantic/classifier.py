@@ -29,7 +29,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-BACKENDS = ("none", "bastion", "remote", "embedding", "vector")
+BACKENDS = ("none", "protectai", "bastion", "remote", "embedding", "vector")
 
 
 class ClassifierError(Exception):
@@ -40,7 +40,7 @@ class ClassifierError(Exception):
 class ClassifierSettings:
     backend: str = "none"
     url: str = ""  # remote backend: resolved from the env var named by `url_env`
-    model: str = ""  # bastion backend: HF repo id; empty = the SDK's free English model
+    model: str = ""  # HF repo id (ProtectAI/deberta-v3-base-prompt-injection-v2 by default)
     timeout_ms: int = 300
     max_chars: int = 2000  # per chunk, ~512 tokens (DeBERTa limit)
     max_chunks: int = 4  # per text; longer texts keep the head chunks and the tail chunk
@@ -53,14 +53,27 @@ class ClassifierSettings:
         if backend not in BACKENDS:
             log.warning("C-INJ-BASTION: unknown backend %r, using 'none'", backend)
             backend = "none"
-        default_url_env = "AICL_EMBEDDING_URL" if backend in ("embedding", "vector") else "AICL_BASTION_URL"
-        url = (env.get(str(p.get("url_env") or default_url_env)) or "").strip()
+        default_url_env = (
+            "AICL_PROTECTAI_URL" if backend == "protectai"
+            else "AICL_EMBEDDING_URL" if backend in ("embedding", "vector")
+            else "AICL_BASTION_URL"
+        )
+        url_key = str(p.get("url_env") or default_url_env)
+        url = (env.get(url_key) or "").strip()
+        if not url:
+            for fallback_key in ("AICL_PROTECTAI_URL", "AICL_BASTION_URL"):
+                if fallback_key in env and env[fallback_key].strip():
+                    url = env[fallback_key].strip()
+                    break
         if not url and backend in ("embedding", "vector"):
             url = (env.get("AICL_OLLAMA_URL") or "").strip()
+        default_model = (
+            "ProtectAI/deberta-v3-base-prompt-injection-v2" if backend == "protectai" else ""
+        )
         return cls(
             backend=backend,
             url=url,
-            model=str(p.get("model") or ""),
+            model=str(p.get("model") or default_model),
             timeout_ms=int(p.get("timeout_ms", 300)),
             max_chars=max(200, int(p.get("max_chars", 2000))),
             max_chunks=max(1, int(p.get("max_chunks", 4))),
@@ -355,7 +368,109 @@ class EmbeddingClassifier:
         await self._client.aclose()
 
 
+DEFAULT_PROTECTAI_MODEL = "ProtectAI/deberta-v3-base-prompt-injection-v2"
+
+
+class ProtectAIClassifier:
+    """ProtectAI DeBERTa v3 prompt-injection classifier (Apache-2.0).
+
+    In-process via HuggingFace `transformers` (or ONNX), or connects to a remote ProtectAI sidecar.
+    """
+
+    name = "protectai"
+
+    def __init__(
+        self,
+        model: str = "",
+        url: str = "",
+        timeout_ms: int = 300,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._model = model or DEFAULT_PROTECTAI_MODEL
+        self._url = url if not url or urlsplit(url).path not in ("", "/") else url.rstrip("/") + "/protect"
+        self._timeout = timeout_ms / 1000.0
+        self._client = client or httpx.AsyncClient()
+        self._pipe: Any = None
+        self._error: str | None = None
+        self._loading: asyncio.Task[None] | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self._pipe is not None or bool(self._url)
+
+    @property
+    def error(self) -> str | None:
+        return self._error
+
+    def _load(self) -> Any:
+        try:
+            from transformers import pipeline
+
+            return pipeline("text-classification", model=self._model, truncation=True, max_length=512)
+        except ImportError:
+            return None
+
+    async def _load_async(self) -> None:
+        t0 = time.perf_counter()
+        try:
+            self._pipe = await asyncio.to_thread(self._load)
+            if self._pipe is None and not self._url:
+                self._error = "transformers not installed (pip install 'aicl[protectai]')"
+            else:
+                self._error = None
+                log.info("ProtectAI classifier loaded in %.0f ms", (time.perf_counter() - t0) * 1000)
+        except Exception as exc:  # noqa: BLE001
+            self._error = f"ProtectAI load failed: {type(exc).__name__}: {exc}"
+        if self._error:
+            log.warning("C-INJ-BASTION: %s", self._error)
+
+    def start(self) -> None:
+        if self._pipe is not None or bool(self._url) or (self._loading is not None and not self._loading.done()):
+            return
+        if self._error and self._loading is not None:
+            return
+        try:
+            self._loading = asyncio.get_running_loop().create_task(self._load_async(), name="protectai-load")
+        except RuntimeError:
+            pass
+
+    async def classify(self, text: str) -> Score:
+        t0 = time.perf_counter()
+        # 1. If remote endpoint configured, query it
+        if self._url:
+            try:
+                resp = await self._client.post(self._url, json={"prompt": text}, timeout=self._timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                risk = next((data[k] for k in ("risk", "score", "probability") if k in data), None)
+                return Score(_clamp(risk), str(data.get("label", "protectai")), (time.perf_counter() - t0) * 1000)
+            except (httpx.HTTPError, ValueError) as exc:
+                raise ClassifierError(f"ProtectAI remote failed: {type(exc).__name__}") from exc
+
+        # 2. In-process pipeline
+        if self._pipe is None:
+            raise ClassifierError(self._error or "ProtectAI model not loaded")
+
+        try:
+            res = await asyncio.to_thread(self._pipe, text)
+            item = res[0] if isinstance(res, list) and res else res
+            label = str(item.get("label", "")).upper()
+            raw_score = float(item.get("score", 0.0))
+            is_attack = label in ("INJECTION", "LABEL_1")
+            risk = raw_score if is_attack else (1.0 - raw_score)
+            return Score(_clamp(risk), label.lower(), (time.perf_counter() - t0) * 1000)
+        except Exception as exc:
+            raise ClassifierError(f"ProtectAI inference failed: {type(exc).__name__}") from exc
+
+    async def aclose(self) -> None:
+        if self._loading is not None and not self._loading.done():
+            self._loading.cancel()
+        await self._client.aclose()
+
+
 def build(settings: ClassifierSettings) -> Classifier | None:
+    if settings.backend == "protectai":
+        return ProtectAIClassifier(settings.model, settings.url, settings.timeout_ms)
     if settings.backend == "bastion":
         return BastionSDK(settings.model)
     if settings.backend == "remote":

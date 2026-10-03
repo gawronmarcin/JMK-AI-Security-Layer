@@ -39,7 +39,7 @@ PATTERNS: list[tuple[str, str, float]] = [
     ("encoded_payload", r"\b(base64|rot13|hex)\b.{0,40}\b(decode|decrypt|execute|follow)\b", 0.4),
     ("authority_claim", r"\b(i am (the|your) (developer|admin|administrator|owner)|authorized by|this is a (test|audit) by)\b", 0.35),
 ]
-_COMPILED = [(pid, re.compile(rx, re.S), w) for pid, rx, w in PATTERNS]
+_COMPILED = [(pid, re.compile(rx, re.DOTALL), w) for pid, rx, w in PATTERNS]
 
 BLOCK_AT = 0.9   # deterministic block threshold
 JUDGE_AT = 0.3   # at or above: grey zone, ask the judge
@@ -129,7 +129,7 @@ def check_injection(text: str, *, judge_threshold: float = 0.6, fail_closed_abov
 
     try:
         j = call_judge(text)
-    except Exception as exc:  # Ollama down, timeout, bad JSON: never crash the gateway
+    except Exception as exc:  # noqa: BLE001 - Ollama down, timeout, bad JSON: never crash the gateway
         block = pr.score >= fail_closed_above
         return Verdict("block" if block else "allow", "other", pr.score,
                        f"judge unavailable ({type(exc).__name__})", "judge_fallback", ms(), pr.hits)

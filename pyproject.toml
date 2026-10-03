@@ -24,8 +24,13 @@ test = [
     "asgi-lifespan>=2.1",
     "pytest-xdist>=3.5",
 ]
-# C-INJ-BASTION in-process backend. AGPL-3.0: optional on purpose, the gateway does not need it
-# (alternative: the Bastion Docker microservice, backend: remote). docs/SEMANTIC_SETUP.md
+# C-INJ-BASTION in-process backends:
+# - protectai: ProtectAI/deberta-v3-base-prompt-injection-v2 (Apache-2.0, recommended)
+# - bastion: bastion-prompt-protection (AGPL-3.0)
+protectai = [
+    "transformers>=4.40",
+    "torch>=2.0",
+]
 bastion = [
     "bastion-prompt-protection",
 ]

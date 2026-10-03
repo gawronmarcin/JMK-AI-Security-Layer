@@ -341,18 +341,14 @@ def apply_redacted_args(tool_args: Any, segments: list[Segment]) -> Any:
         if path is not None and isinstance(path, list):
             curr = updated
             for p in path[:-1]:
-                if isinstance(curr, dict) and p in curr:
-                    curr = curr[p]
-                elif isinstance(curr, list) and isinstance(p, int) and 0 <= p < len(curr):
+                if isinstance(curr, dict) and p in curr or isinstance(curr, list) and isinstance(p, int) and 0 <= p < len(curr):
                     curr = curr[p]
                 else:
                     break
             else:
                 if path:
                     last_p = path[-1]
-                    if isinstance(curr, dict) and last_p in curr:
-                        curr[last_p] = seg.text
-                    elif isinstance(curr, list) and isinstance(last_p, int) and 0 <= last_p < len(curr):
+                    if isinstance(curr, dict) and last_p in curr or isinstance(curr, list) and isinstance(last_p, int) and 0 <= last_p < len(curr):
                         curr[last_p] = seg.text
                 elif isinstance(updated, str):
                     updated = seg.text

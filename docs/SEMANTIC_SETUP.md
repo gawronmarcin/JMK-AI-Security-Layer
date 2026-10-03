@@ -88,19 +88,19 @@ python scripts/check_semantic.py --skip-classifier --judge-model qwen2.5:1.5b
 - `controls.injection_semantic.levels.<profil>.threshold`: od jakiego score sędzia blokuje.
 - `semantic.run_when.sample_rate`: ułamek pozostałych zapytań oceniany zawsze. **Bez klasyfikatora** parafraza bez trafień regexów ma ryzyko 0 i do sędziego nie trafia. Jeśli Bastiona nie ma, a sprzęt pozwala, ustaw `1.0` (każde zapytanie przez sędziego, kosztem latencji).
 
-## 3. Bastion (klasyfikator `C-INJ-BASTION`)
+## 3. Klasyfikator Tier-2 (`C-INJ-BASTION`)
 
-Bastion Prompt Protection: DeBERTa-v3-xsmall (~70M parametrów, ONNX INT8, CPU), darmowy model **tylko angielski**. Polskie parafrazy łapie sędzia Ollama.
+Obsługiwane modele klasyfikacji (wybór w `controls.injection_bastion.params.backend`):
 
-> **Licencja:** darmowy model i SDK są na **AGPL-3.0**. Dlatego SDK jest opcjonalną zależnością (`.[bastion]`), a nie częścią gatewaya. Wariant z osobnym serwisem (Docker) trzyma go poza procesem gatewaya. Alternatywę o licencji Apache-2.0 można podpiąć przez backend `remote` (pkt 3.3).
+| backend | Model / Technologia | Licencja | Co robi |
+|---|---|---|---|
+| `none` (domyślnie) | — | — | kontrola widoczna w telemetrii, ale `skipped` |
+| `protectai` (rekomendowany) | `ProtectAI/deberta-v3-base-prompt-injection-v2` | **Apache-2.0** | Pełny model DeBERTa v3 przez transformers/ONNX. Czysta licencja komercyjna. |
+| `embedding` | Semantic Intent Vector Centroids | **Apache-2.0** | Ultra-lekki wektor semantyczny (<0.2 ms, zero zależności, działa offline). |
+| `remote` | HTTP microservice (`POST /protect`) | zależna | Zewnętrzny kontener lub sidecar (np. ProtectAI/Bastion). |
+| `bastion` | Bastion Prompt Protection SDK | **AGPL-3.0** | Wymaga opcjonalnej zależności `.[bastion]`. |
 
-Backend wybiera się w polityce, `controls.injection_bastion.params.backend`:
-
-| backend | co robi |
-|---|---|
-| `none` (domyślnie) | kontrola widoczna, ale `skipped` |
-| `bastion` | SDK w procesie gatewaya |
-| `remote` | HTTP `POST {AICL_BASTION_URL}/protect {"prompt": ...}` → `{"risk": 0..1, "label": ...}` |
+> **Dlaczego ProtectAI zamiast Bastiona?** Model ProtectAI (`ProtectAI/deberta-v3-base-prompt-injection-v2`) posiada licencję **Apache-2.0** (w 100% bezpieczna dla firm, brak ograniczeń copyleft z AGPL-3.0) i jest rynkowym standardem na Hugging Face.
 
 Zmiana `backend` działa na gorąco: gateway buduje backend od nowa po zapisie polityki. Progi i akcje zmieniają się bez przebudowy.
 

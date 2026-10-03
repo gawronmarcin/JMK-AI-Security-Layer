@@ -139,6 +139,7 @@ controls:
       permissive: {action: flag,  min_severity: high}
 
   # Tier 2 of the injection cascade: C-INJ-PAT (regex) -> C-INJ-BASTION (classifier) -> C-INJ-SEM (Ollama).
+  # Supported ML models: ProtectAI (Apache-2.0, recommended), Embedding (vector), Bastion, Remote HTTP.
   # risk >= threshold_block -> action; risk in [threshold_grey, threshold_block) -> escalated to the
   # Ollama judge (keep that range inside semantic.run_when.risk_between). Setup: docs/SEMANTIC_SETUP.md
   injection_bastion:
@@ -148,9 +149,9 @@ controls:
     on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | embedding (vector similarity) | bastion (SDK) | remote (HTTP /protect)
-      url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8080 (Bastion Docker image)
-      model: ""                         # bastion: HF repo id, empty = free English model
+      backend: none                     # none (skipped) | protectai (Apache-2.0) | embedding (vector) | bastion | remote
+      url_env: AICL_PROTECTAI_URL       # remote/sidecar URL env
+      model: "ProtectAI/deberta-v3-base-prompt-injection-v2" # HF repo id (Apache-2.0)
       timeout_ms: 300
       threshold_block: 0.80
       threshold_grey: 0.30
