@@ -283,6 +283,26 @@ def create_app() -> FastAPI:
     async def ollama_generate(request: Request) -> JSONResponse:
         return await _ollama(request, "ollama_generate")
 
+    @app.post("/api/embed")
+    async def ollama_embed(request: Request) -> JSONResponse:
+        body = await request.json()
+        raw = request.headers.get("x-mock-scenario")
+        record(request, body, raw, "ollama_embed")
+        inputs = body.get("input", [])
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        import hashlib
+        # Return deterministic unit-ish vectors (1024-dim like bge-m3)
+        embeddings = []
+        for text in inputs:
+            # Deterministic pseudo-embedding based on hash of text
+            h = int(hashlib.md5(str(text).encode()).hexdigest(), 16)
+            vec = [float((h >> (i % 64)) & 1) for i in range(1024)]
+            # normalize
+            norm = (sum(x * x for x in vec) or 1.0) ** 0.5
+            embeddings.append([x / norm for x in vec])
+        return JSONResponse({"model": body.get("model", "bge-m3"), "embeddings": embeddings})
+
     # ------------------------------------------------------------- kontrolne
     @app.get("/__calls")
     async def calls(kind: str | None = None) -> dict:

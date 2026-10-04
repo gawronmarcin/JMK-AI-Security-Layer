@@ -193,7 +193,7 @@ controls:
     on_error: fail_open                 # embedding service down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | ollama (/api/embed)
+      backend: ollama                   # none (skipped) | ollama (/api/embed)
       url_env: AICL_OLLAMA_URL
       model: bge-m3                     # multilingual; ollama pull bge-m3
       corpus: ./feeds/injection_examples.yaml
@@ -218,7 +218,7 @@ controls:
     on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | protectai (ONNX, Apache-2.0) | bastion (SDK, AGPL-3.0) | remote (HTTP /protect)
+      backend: protectai                # none (skipped) | protectai (ONNX, Apache-2.0) | bastion (SDK, AGPL-3.0) | remote (HTTP /protect)
       url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8090 (Bastion Docker image or a compatible sidecar)
       model: ""                         # HF repo id; empty = the backend's default (protectai: ProtectAI/deberta-v3-base-prompt-injection-v2)
       timeout_ms: 300

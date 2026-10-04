@@ -14,7 +14,7 @@ x-app: &app
   build:
     context: .
     dockerfile: docker/Dockerfile
-    args: {EXTRAS: "${AICL_EXTRAS:-test}"}
+    args: {EXTRAS: "${AICL_EXTRAS:-test,protectai}"}
   image: aicl:dev
 
 services:

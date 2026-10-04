@@ -10,8 +10,8 @@ RUN useradd -u 10001 -m -s /bin/bash aicl && \
 
 COPY --chown=aicl:aicl . .
 
-# Optional extras, e.g. AICL_EXTRAS=test,protectai,redis docker compose build (default: test only)
-ARG EXTRAS=test
+# Optional extras, e.g. AICL_EXTRAS=test,protectai,redis docker compose build (default: test,protectai)
+ARG EXTRAS=test,protectai
 RUN pip install --no-cache-dir -e ".[${EXTRAS}]" && \
     chown -R aicl:aicl /app/data /home/aicl
 
