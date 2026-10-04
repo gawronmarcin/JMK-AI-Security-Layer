@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from aicl.policy.schema import CompiledPolicy
@@ -69,13 +70,41 @@ def classifier_listener(env: Mapping[str, str]) -> PolicyListener:
     return configure_classifier
 
 
+def embedding_listener(env: Mapping[str, str], base_dir: Path) -> PolicyListener:
+    """Build the C-INJ-EMB index from its control `params` (relative paths against `base_dir`).
+
+    Rebuilt only when the embedding settings change; corpus file edits are picked up by the
+    index itself (hot reload of the example feed). Thresholds stay in the per-request `cfg`.
+    """
+    last = None
+
+    def configure_embedding(policy: CompiledPolicy) -> None:
+        nonlocal last
+        try:
+            from aicl.controls import injection_embedding
+            from aicl.semantic.embedding import EmbeddingSettings
+        except ImportError:
+            return
+        spec = next((c for c in policy.raw.controls.values() if c.id == injection_embedding.CONTROL_ID), None)
+        params = spec.params if spec is not None and spec.enabled else {"backend": "none"}
+        settings = EmbeddingSettings.from_params(params, env, base_dir)
+        if settings == last:
+            return
+        injection_embedding.configure(settings)
+        last = settings
+        log.info("embedding detector configured (backend=%s, model=%s)", settings.backend, settings.model)
+
+    return configure_embedding
+
+
 def detector_status() -> dict[str, Any]:
     """AI-based detectors as seen by the gateway (for /healthz): classifier backend and judge."""
     out: dict[str, Any] = {}
     try:
-        from aicl.controls import bastion, injection_semantic
+        from aicl.controls import bastion, injection_embedding, injection_semantic
     except ImportError:
         return out
+    out["embedding"] = injection_embedding.status()
     out["classifier"] = bastion.status()
     out["judge"] = injection_semantic.status()
     return out

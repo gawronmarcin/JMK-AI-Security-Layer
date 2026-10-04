@@ -20,3 +20,8 @@ __pycache__/
 
 # Dashboard tooling (tests/dashboard, optional Node/Playwright)
 node_modules/
+
+# macOS
+.DS_Store
+# local policy for experiments (AICL_POLICY=policies/local.yaml in .env): tests always use default.yaml
+policies/local.yaml

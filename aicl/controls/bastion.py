@@ -8,6 +8,16 @@ classifier, ~5-20 ms) -> C-INJ-SEM (500, Ollama LLM judge, seconds on CPU).
   semantic judge runs for risk inside `semantic.run_when.risk_between`.
 - risk < threshold_grey: clean, reported risk 0 so this control does not trigger the judge.
 
+The models are English-only and flag much ordinary non-English text (55% of the corpus's
+non-English benign examples with ProtectAI). Hence, per profile:
+- `languages` / `other_languages`: text not detected as English is skipped (multilingual
+  C-INJ-EMB and C-INJ-SEM cover it), only escalated to the judge, or classified anyway.
+- `corroborate`: in the user's own messages a high score blocks only when an earlier tier already
+  found the request suspicious (ctx.risk >= corroborate_min_risk, e.g. C-INJ-EMB "uncertain");
+  otherwise it is escalated to the judge. Untrusted content (tool output, documents) is blocked
+  on the score alone: the model's English false positives were all conversational phrases. Measured on scripts/stack_cases.yaml with all tiers: classifier
+  blocking alone -> 11/24 false positives; English-only + corroboration -> 0/24, 46/47 attacks.
+
 The classifier backend (none | bastion | remote) comes from `params` and is built by the policy
 listener in aicl/integrations.py via `configure()`, once per settings change, not per request.
 Without a backend, or while the model is loading, the control reports `skipped`.
@@ -22,11 +32,13 @@ from typing import Any
 
 from aicl.models import Action, Decision, Match, Origin, RequestContext, Segment, Severity, Stage
 from aicl.registry import register_control
-from aicl.semantic.classifier import Classifier, ClassifierError, ClassifierSettings, Score, build, chunks
+from aicl.semantic.classifier import Classifier, ClassifierError, ClassifierSettings, Score, build, texts_for
+from aicl.semantic.lang import is_english
 
 CONTROL_ID = "C-INJ-BASTION"
 THREATS = ["TH-01", "TH-02"]
 CLASSIFIED_ORIGINS = {Origin.user, Origin.tool_result, Origin.retrieved, Origin.artifact}
+ESCALATE_RISK = 0.5  # inside the default semantic.run_when.risk_between [0.15, 0.85]
 
 
 @dataclass
@@ -77,21 +89,6 @@ def _decision(action: Action, reason: str, **kw: Any) -> Decision:
                     reason=reason, **kw)
 
 
-def texts_for(segments: list[Segment], s: ClassifierSettings) -> list[tuple[Segment, str]]:
-    """Original text, its normalized form when normalization removed obfuscation (homoglyphs,
-    fullwidth, zero-width), and decoded fragments; chunked to the model's window. Latest
-    segments first, capped at `max_texts`."""
-    out: list[tuple[Segment, str]] = []
-    for seg in reversed(segments):
-        variants = [seg.text]
-        if seg.norm.casefold() != seg.text.casefold():
-            variants.append(seg.norm)
-        variants += seg.decoded
-        for v in variants:
-            out += [(seg, c) for c in chunks(v, s.max_chars, s.max_chunks) if c.strip()]
-    return out[: s.max_texts]
-
-
 @register_control
 class BastionControl:
     id = CONTROL_ID
@@ -111,17 +108,30 @@ class BastionControl:
             return _decision(Action.allow, f"classifier unavailable: {why}", skipped=True, threat_ids=threat_ids)
 
         segments = [s for s in ctx.segments if s.origin in CLASSIFIED_ORIGINS and s.text.strip()]
-        work = texts_for(segments, st.settings)
+        s = st.settings
+        work = texts_for(segments, s.max_chars, s.max_chunks, s.max_texts)
         if not work:
             return _decision(Action.allow, "no user or untrusted text to classify", skipped=True,
                              threat_ids=threat_ids)
 
-        results = await asyncio.gather(*(clf.classify(t) for _, t in work), return_exceptions=True)
-        scored: list[tuple[Segment, Score]] = []
+        languages = list(_cfg(cfg, "languages", ["en"]))
+        other_languages = str(_cfg(cfg, "other_languages", "skip"))
+        if "*" in languages or other_languages == "classify":
+            native, foreign = work, []
+        else:
+            native = [w for w in work if is_english(w[1])]
+            foreign = [w for w in work if not is_english(w[1])] if other_languages == "escalate" else []
+        if not native and not foreign:
+            return _decision(Action.allow, "no English text: left to the multilingual tiers (C-INJ-EMB, C-INJ-SEM)",
+                             skipped=True, threat_ids=threat_ids)
+
+        todo = native + foreign
+        results = await asyncio.gather(*(clf.classify(t) for _, t in todo), return_exceptions=True)
+        scored: list[tuple[Segment, Score, bool]] = []
         errors: list[ClassifierError] = []
-        for (seg, _), r in zip(work, results):
+        for i, ((seg, _), r) in enumerate(zip(todo, results)):
             if isinstance(r, Score):
-                scored.append((seg, r))
+                scored.append((seg, r, i < len(native)))
             elif isinstance(r, ClassifierError):
                 errors.append(r)
             elif isinstance(r, BaseException):
@@ -129,13 +139,26 @@ class BastionControl:
         if not scored:
             raise errors[0]  # engine applies on_error (fail_open) and records it in the audit event
 
-        seg, best = max(scored, key=lambda p: p[1].risk)
         threshold_block = float(_cfg(cfg, "threshold_block", 0.80))
         threshold_grey = float(_cfg(cfg, "threshold_grey", 0.30))
+        corroborate = bool(_cfg(cfg, "corroborate", False))
+        min_risk = float(_cfg(cfg, "corroborate_min_risk", 0.30))
+        own = [(seg, sc) for seg, sc, nat in scored if nat]
+        other = [(seg, sc) for seg, sc, nat in scored if not nat]
+        seg, best = max(own, key=lambda p: p[1].risk) if own else max(other, key=lambda p: p[1].risk)
         risk = best.risk
         label = best.label or "attack"
 
-        if risk >= threshold_block:
+        def escalate(why: str) -> Decision:
+            return _decision(Action.allow, f"classifier ({clf.name}): {why}, escalated to the semantic judge",
+                             threat_ids=threat_ids, severity="medium", score=risk, risk=ESCALATE_RISK)
+
+        if own and risk >= threshold_block:
+            # corroboration is for the user's own messages, where the model's false positives are
+            # ("disregard my last email"); in untrusted content (tool output, documents) an
+            # instruction aimed at the model is itself the attack (ordinary documents scored ~0)
+            if corroborate and ctx.risk < min_risk and seg.trust != "untrusted":
+                return escalate(f"risk {risk:.2f} but no earlier tier found the text suspicious")
             return _decision(
                 Action(_cfg(cfg, "action", "block")),
                 f"classifier ({clf.name}): prompt injection, risk {risk:.2f} >= {threshold_block:.2f}",
@@ -143,13 +166,10 @@ class BastionControl:
                 matches=[Match(kind=f"classifier_{label}", segment_idx=seg.idx,
                                masked=f"[{len(seg.text)} chars classified]")],
             )
-        if risk >= threshold_grey:
-            return _decision(
-                Action.allow,
-                f"classifier ({clf.name}): uncertain, risk {risk:.2f} in [{threshold_grey:.2f}, "
-                f"{threshold_block:.2f}), escalated to the semantic judge",
-                threat_ids=threat_ids, severity="medium", score=risk, risk=risk,
-            )
+        if own and risk >= threshold_grey:
+            return escalate(f"uncertain, risk {risk:.2f} in [{threshold_grey:.2f}, {threshold_block:.2f})")
+        if not own and risk >= threshold_grey:
+            return escalate(f"non-English text, risk {risk:.2f} (English-only model)")
         # risk 0, not the raw score: below threshold_grey this control must not wake the judge
         # through semantic.run_when.risk_between (the raw score stays in `score` for the audit)
         return _decision(

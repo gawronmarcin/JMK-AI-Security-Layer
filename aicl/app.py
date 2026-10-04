@@ -36,7 +36,12 @@ from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
 from aicl.flows.tool_invoke import handle_tool_invoke
-from aicl.integrations import classifier_listener, detector_status, semantic_judge_listener
+from aicl.integrations import (
+    classifier_listener,
+    detector_status,
+    embedding_listener,
+    semantic_judge_listener,
+)
 from aicl.models import Control
 from aicl.policy.loader import load_policy_file
 from aicl.proxy import UpstreamClient
@@ -97,7 +102,7 @@ def create_app(
         controls=controls,
         policy_path=policy_path,
         reload_interval=reload_interval,
-        policy_listeners=[semantic_judge_listener(env), classifier_listener(env)],
+        policy_listeners=[semantic_judge_listener(env), embedding_listener(env, base), classifier_listener(env)],
     )
     set_store(rt.state)
 

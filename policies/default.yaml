@@ -143,10 +143,42 @@ controls:
       balanced:   {action: block, min_severity: medium}
       permissive: {action: flag,  min_severity: high}
 
-  # Tier 2 of the injection cascade: C-INJ-PAT (regex) -> C-INJ-BASTION (classifier) -> C-INJ-SEM (Ollama).
-  # Supported ML models: ProtectAI (Apache-2.0, recommended), Embedding (vector), Bastion, Remote HTTP.
+  # Injection cascade: C-INJ-PAT (regex) -> C-INJ-EMB (embeddings) -> C-INJ-BASTION (classifier)
+  # -> C-INJ-SEM (LLM judge). Setup and calibration: docs/SEMANTIC_SETUP.md
+  #
+  # Tier 2: multilingual embedding similarity to the example corpus (feeds/injection_examples.yaml).
+  # sim = cosine to the closest attack example; margin = sim - cosine to the closest benign one.
+  # sim/margin use the mean of the top_k closest examples. sim >= sim_block and margin >= margin_block
+  # -> action; sim >= sim_grey and margin >= margin_grey -> escalated to the judge.
+  # Calibrated for bge-m3 on corpus 2026-10-04.3 with leave-group-out scoring
+  # (python scripts/check_semantic.py --embedding ollama --calibrate): balanced blocks 67% of corpus
+  # attacks and sends another 25% to the judge, with 0.7% of benign examples blocked and 8.2% judged.
+  # Recalibrate after changing `model` or the corpus.
+  injection_embedding:
+    id: C-INJ-EMB
+    threat_ids: [TH-01, TH-02]
+    enabled: true
+    on_error: fail_open                 # embedding service down must not take the gateway down
+    stages: [input, tool_result]
+    params:
+      backend: none                     # none (skipped) | ollama (/api/embed)
+      url_env: AICL_OLLAMA_URL
+      model: bge-m3                     # multilingual; ollama pull bge-m3
+      corpus: ./feeds/injection_examples.yaml
+      timeout_ms: 3000                  # one batch per request; long documents are several chunks (CPU)
+      top_k: 3
+      sim_block: 0.64
+      margin_block: 0.07
+      sim_grey: 0.59
+      margin_grey: 0.03
+    levels:
+      strict:     {action: block, sim_block: 0.64, margin_block: 0.03, sim_grey: 0.53, margin_grey: 0.00}
+      balanced:   {action: block, sim_block: 0.64, margin_block: 0.07, sim_grey: 0.59, margin_grey: 0.03}
+      permissive: {action: flag,  sim_block: 0.64, margin_block: 0.10, sim_grey: 0.63, margin_grey: 0.03}
+
+  # Tier 3: English classifier: ProtectAI (Apache-2.0, recommended), Bastion (AGPL-3.0) or a remote service.
   # risk >= threshold_block -> action; risk in [threshold_grey, threshold_block) -> escalated to the
-  # Ollama judge (keep that range inside semantic.run_when.risk_between). Setup: docs/SEMANTIC_SETUP.md
+  # LLM judge (keep that range inside semantic.run_when.risk_between).
   injection_bastion:
     id: C-INJ-BASTION
     threat_ids: [TH-01, TH-02]
@@ -154,14 +186,23 @@ controls:
     on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | protectai (Apache-2.0) | embedding (vector) | bastion | remote
-      url_env: AICL_PROTECTAI_URL       # remote/sidecar URL env
-      model: "ProtectAI/deberta-v3-base-prompt-injection-v2" # HF repo id (Apache-2.0)
+      backend: none                     # none (skipped) | protectai (ONNX, Apache-2.0) | bastion (SDK, AGPL-3.0) | remote (HTTP /protect)
+      url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8090 (Bastion Docker image or a compatible sidecar)
+      model: ""                         # HF repo id; empty = the backend's default (protectai: ProtectAI/deberta-v3-base-prompt-injection-v2)
       timeout_ms: 300
       threshold_block: 0.80
       threshold_grey: 0.30
+      # English-only models: non-English text is skipped (C-INJ-EMB and C-INJ-SEM cover it) or only
+      # escalated; with corroborate, a high score on the user's own message blocks only if an earlier
+      # tier (ctx.risk) agrees, otherwise the judge decides (untrusted content: score alone blocks).
+      # Measured on scripts/stack_cases.yaml with all tiers: blocking alone 11/24 false positives,
+      # these settings 0/24 (docs/SEMANTIC_SETUP.md).
+      languages: [en]
+      other_languages: skip             # skip | escalate | classify
+      corroborate: true
+      corroborate_min_risk: 0.30
     levels:
-      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25}
+      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25, other_languages: escalate, corroborate: false}
       balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30}
       permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40}
     
@@ -345,7 +386,7 @@ semantic:
   provider: ollama
   base_url_env: AICL_OLLAMA_URL
   model: "llama3.2:3b"
-  timeout_ms: 1500
+  timeout_ms: 5500
   run_when:
     untrusted_segments: true            # always judge tool output / retrieved docs / uploads
     risk_between: [0.15, 0.85]          # deterministic risk in the grey zone

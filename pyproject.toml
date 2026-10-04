@@ -24,12 +24,15 @@ test = [
     "asgi-lifespan>=2.1",
     "pytest-xdist>=3.5",
 ]
-# C-INJ-BASTION in-process backends:
-# - protectai: ProtectAI/deberta-v3-base-prompt-injection-v2 (Apache-2.0, recommended)
-# - bastion: bastion-prompt-protection (AGPL-3.0)
+# C-INJ-BASTION in-process backends (docs/SEMANTIC_SETUP.md):
+# - protectai: ProtectAI/deberta-v3-base-prompt-injection-v2 (Apache-2.0, recommended), ONNX export
+#   run with onnxruntime: no torch/transformers
+# - bastion: bastion-prompt-protection (AGPL-3.0, optional on purpose)
 protectai = [
-    "transformers>=4.40",
-    "torch>=2.0",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.20",
+    "numpy>=1.24",
 ]
 bastion = [
     "bastion-prompt-protection",

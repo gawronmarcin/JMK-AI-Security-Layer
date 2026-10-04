@@ -69,7 +69,7 @@ def apply_test_environment(policy: dict[str, Any], workdir: Path) -> dict[str, A
     * audit -> plik w katalogu tymczasowym przypadku,
     * względne ścieżki feedów -> bezwzględne (temp policy leży poza repo),
     * model sędziego i modelu lokalnego -> nazwy rozpoznawane przez mock,
-    * backend klasyfikatora C-INJ-BASTION -> none (chyba że AICL_TEST_CLASSIFIER_BACKEND).
+    * backend klasyfikatora C-INJ-BASTION i embeddingów C-INJ-EMB -> none (chyba że env AICL_TEST_*).
     """
     p = copy.deepcopy(policy)
     p.setdefault("audit", {})["path"] = str(workdir / "audit.jsonl")
@@ -83,6 +83,9 @@ def apply_test_environment(policy: dict[str, Any], workdir: Path) -> dict[str, A
         if isinstance(c, dict) and c.get("id") == "C-INJ-BASTION":
             # klasyfikator: domyślnie wyłączony w testach (offline, deterministycznie); live: env
             c.setdefault("params", {})["backend"] = os.environ.get("AICL_TEST_CLASSIFIER_BACKEND", "none")
+        if isinstance(c, dict) and c.get("id") == "C-INJ-EMB":
+            # embeddingi: jw.; live: AICL_TEST_EMBEDDING_BACKEND=ollama (+ AICL_OLLAMA_URL z extra_env)
+            c.setdefault("params", {})["backend"] = os.environ.get("AICL_TEST_EMBEDDING_BACKEND", "none")
     for m in p.get("models", []) or []:
         if m.get("provider") == "ollama":
             m["upstream_model"] = LOCAL_MODEL

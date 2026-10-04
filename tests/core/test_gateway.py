@@ -347,6 +347,8 @@ async def test_healthz(gw):
     # AI detectors as configured (public endpoint: no URLs); default policy has no classifier backend
     assert body["detectors"]["classifier"] == {"backend": "none", "ready": False, "error": None}
     assert set(body["detectors"]["judge"]) == {"model", "ready", "timeout_ms"}
+    assert body["detectors"]["embedding"]["backend"] == "none"
+    assert body["detectors"]["embedding"]["ready"] is False
 
 
 async def test_disallowed_model_is_blocked_by_c_model_allow(gw):
