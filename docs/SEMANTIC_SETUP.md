@@ -37,19 +37,25 @@ Sprawdzenie:
 ollama --version
 ```
 
-### 2.2 Model
+### 2.2 Model i licencje
 
-Polityka używa `llama3.2:3b` (`semantic.model`, a dla upstreamu `models[ollama-local].upstream_model`):
-
-```bash
-ollama pull llama3.2:3b
-```
-
-Na maszynach bez GPU warto porównać mniejsze modele:
+Polityka produkcyjna używa `qwen2.5:1.5b` (`semantic.model`, a dla upstreamu `models[ollama-local].upstream_model`):
 
 ```bash
 ollama pull qwen2.5:1.5b
 ```
+
+#### Zestawienie modeli, licencji i czasów (CPU):
+
+| Model | Licencja | Zastosowanie komercyjne | Obsługa PL | Czas na CPU (p95) | Rekomendowany timeout (`timeout_ms`) |
+|---|---|---|---|---|---|
+| **`qwen2.5:1.5b`** (domyślny) | **Apache-2.0** | **TAK** (pełna komercyjna) | Bardzo dobra | ~2.5–3.0 s | **4500 ms** (1.5 × p95) |
+| `qwen2.5:7b` | **Apache-2.0** | **TAK** | Doskonała | ~12–15 s | 20000 ms |
+| `qwen2.5:3b` | Qwen Research License | **NIE** (tylko badania) | Bardzo dobra | ~7–8 s | 12000 ms |
+| `llama3.2:3b` | Llama 3.2 Community | Warunkowo (restrykcje Meta) | Przeciętna | ~4–5 s | 7000 ms |
+
+> [!IMPORTANT]
+> **Licencja komercyjna**: Modele `qwen2.5:1.5b` i `qwen2.5:7b` są objęte licencją **Apache-2.0**, co pozwala na ich bezpieczne wykorzystanie w produktach komercyjnych. Z kolei wariant `qwen2.5:3b` posiada dedykowaną licencję badawczą (*Qwen Research License*), która wyklucza zastosowania komercyjne. Dlatego dla gatewaya domyślnie wybrano `qwen2.5:1.5b`.
 
 ### 2.3 Konfiguracja gatewaya
 
@@ -80,16 +86,16 @@ Skrypt:
 - pokazuje werdykt, score i latencję każdej sondy,
 - proponuje wartość `semantic.timeout_ms`.
 
-Porównanie modelu bez edycji polityki:
+Porównanie innego modelu bez edycji polityki:
 
 ```bash
-python scripts/check_semantic.py --skip-classifier --judge-model qwen2.5:1.5b
+python scripts/check_semantic.py --skip-classifier --judge-model qwen2.5:7b
 ```
 
 ### 2.5 Strojenie (hot reload, bez restartu)
 
-- `semantic.timeout_ms`: musi być powyżej p95 z pomiaru, inaczej sędzia „nie zdąży” i ruch przechodzi (fail_open). Na CPU: `llama3.2:3b` ok. 4–5 s, `qwen2.5:3b` ok. 8 s na ocenę, gdy w pamięci są też embeddingi i klasyfikator, więc dla qwen ustaw ok. 12000. W audycie widać to jako `error: C-INJ-SEM: JudgeUnavailable`.
-- Model sędziego dla wielu języków: `qwen2.5:3b` (`ollama pull qwen2.5:3b`) radzi sobie z polskim wyraźnie lepiej niż `llama3.2:3b` (pkt 6).
+- `semantic.timeout_ms`: musi być powyżej p95 z pomiaru, inaczej sędzia „nie zdąży” i ruch przechodzi (fail_open). Dla domyślnego `qwen2.5:1.5b` na CPU optymalne jest **4500 ms** (1,5 × p95 ok. 2,8 s). W audycie timeout jest widoczny jako `error: C-INJ-SEM: JudgeUnavailable`.
+- Model sędziego dla wielu języków: rodzina `qwen2.5` radzi sobie z polskim wyraźnie lepiej niż `llama3.2:3b`.
 - `semantic.model`: zmiana modelu w locie, po zapisie pliku gateway przeładuje politykę w ~1 s.
 - `controls.injection_semantic.levels.<profil>.threshold`: od jakiego score sędzia blokuje.
 - `semantic.run_when.sample_rate`: ułamek pozostałych zapytań oceniany zawsze. **Bez embeddingów i klasyfikatora** parafraza bez trafień regexów ma ryzyko 0 i do sędziego nie trafia. Jeśli ich nie ma, a sprzęt pozwala, ustaw `1.0` (każde zapytanie przez sędziego, kosztem latencji).

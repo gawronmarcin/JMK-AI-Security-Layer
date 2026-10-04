@@ -104,6 +104,13 @@ def test_pii_action_follows_cfg():
     (f"Authorization {JWT}", "jwt"),
     ("password: hunter2x", "password_assignment"),
     ("hasło: Tajne123", "password_assignment"),
+    ("Moje hasło do systemu to TajneHaslo2026!", "password_phrase"),
+    ("The database password is AdminPass123", "password_phrase"),
+    ("my pass is SuperSecret123", "password_phrase"),
+    ("PIN is 1234", "password_phrase"),
+    ("PIN to 1234", "password_phrase"),
+    ("login i hasło: admin / SecretPass123", "password_phrase"),
+    ("hasło do serwera brzmi Tajne999", "password_phrase"),
     ("api_key=sk_live_4eC39HqLyjWDarjtT1zdp7dc", "api_key_generic"),
     ("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----", "private_key_block"),
 ])
@@ -119,9 +126,22 @@ def test_secrets_negative_detected(text, kind):
     "token: abcabcabcabcabcabc",
     "akiaiosfodnn7example",                 # secrets are case-sensitive
     "Reset your password in settings",
+    "Jak zmienić hasło?",
+    "Password is required",
+    "Hasło to podstawa bezpieczeństwa",
+    "Hasło do konta jest wymagane",
+    "What is the password policy?",
 ])
 def test_secrets_positive_passes(text):
     assert run(SecretsOutput, text).action == Action.allow
+
+
+def test_password_phrase_redacts_only_value():
+    text = "Moje hasło do systemu to TajneHaslo2026!"
+    d = run(SecretsOutput, text)
+    assert kinds(d) == ["password_phrase"]
+    m = d.matches[0]
+    assert text[m.start:m.end] == "TajneHaslo2026!"
 
 
 def test_truncated_private_key_is_redacted_to_end():

@@ -91,3 +91,51 @@ async def test_admin_policy_preview(tmp_path):
         diff_entry = next(d for d in diff_data["diff"] if d["request_id"] == "req_replay_01")
         assert diff_entry["original_action"] == "allow"
         assert diff_entry["candidate_action"] == "block"
+
+        # 4. Candidate policy removes identity -> blocked
+        cand_no_ident = policy_path.read_text().replace("id: support-agent-01", "id: removed-agent")
+        r = await client.post(
+            "/admin/policy/preview",
+            json={"policy": cand_no_ident, "limit": 10},
+            headers={"Authorization": f"Bearer {KEYS['admin']}"},
+        )
+        assert r.status_code == 200
+        diff_ident = r.json()
+        entry_ident = next(d for d in diff_ident["diff"] if d["request_id"] == "req_replay_01")
+        assert entry_ident["candidate_action"] == "block"
+        assert any("identity 'support-agent-01' is not defined" in reason for reason in entry_ident["reasons"])
+
+        # 5. Shadow-suppressed event re-evaluated under enforce
+        evt_shadow = new_event(
+            "request",
+            request_id="req_replay_02",
+            session_id="sess_replay_02",
+            endpoint="chat",
+            identity="support-agent-01",
+            role="support_agent",
+            profile="balanced",
+            model="mock-fast",
+            final_action=Action.allow,
+            decisions=[
+                AuditDecision(
+                    control_id="C-INJ-PAT",
+                    threat_ids=["TH-01"],
+                    action=Action.allow,
+                    shadow_suppressed=True,
+                    reason="prompt injection pattern detected in shadow mode",
+                )
+            ],
+        )
+        rt.audit.emit(evt_shadow)
+
+        r = await client.post(
+            "/admin/policy/preview",
+            content=policy_path.read_text(),
+            headers={"Authorization": f"Bearer {KEYS['admin']}"},
+        )
+        assert r.status_code == 200
+        shadow_eval = r.json()
+        entry_shadow = next(d for d in shadow_eval["diff"] if d["request_id"] == "req_replay_02")
+        assert entry_shadow["original_action"] == "allow"
+        assert entry_shadow["candidate_action"] == "block"
+        assert any("was shadow-suppressed previously, now enforced" in r for r in entry_shadow["reasons"])

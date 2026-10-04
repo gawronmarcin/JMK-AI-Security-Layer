@@ -142,9 +142,30 @@ def _looks_like_secret(value: str) -> bool:
     return any(c.isdigit() for c in value) and any(c.isalpha() for c in value)
 
 
+_NON_PASSWORD_WORDS = frozenset({
+    # English
+    "required", "mandatory", "needed", "optional", "important", "critical",
+    "secret", "hidden", "private", "public", "protected", "confidential",
+    "changed", "updated", "reset", "expired", "valid", "invalid", "correct", "incorrect",
+    "weak", "strong", "simple", "complex", "empty", "missing", "unknown",
+    "something", "anything", "nothing", "everything", "recommended",
+    # Polish
+    "podstawa", "podstawą", "wymagane", "obowiązkowe", "potrzebne", "ważne", "kluczowe",
+    "tajne", "poufne", "prywatne", "publiczne", "chronione", "ukryte", "bezpieczne",
+    "zmienione", "zaktualizowane", "zresetowane", "wygasłe", "błędne", "poprawne", "niepoprawne",
+    "słabe", "silne", "proste", "trudne", "złożone", "puste", "brak", "nieznane",
+    "bezpieczeństwo", "bezpieczeństwa", "zasada", "standard",
+})
+
+
 def _looks_like_password(value: str) -> bool:
     low = value.lower()
     if low in {"true", "false", "none", "null", "nil", "redacted"}:
+        return False
+    low_clean = low.strip(".!?,:;\"'")
+    if low_clean in _NON_PASSWORD_WORDS:
+        return False
+    if len(low_clean) < 4:
         return False
     return not (value[0] in "$<{%*" or set(value) <= {"*"})
 
@@ -290,6 +311,36 @@ SECRET_DETECTORS: dict[str, tuple[Detector, ...]] = {
             "password_assignment",
             # EN + PL keywords: password / passwd / pwd / hasło
             _c(r"\b(?:password|passwd|pwd|has[łl]o)\b[\"']?\s*[:=]\s*[\"']?([^\s\"',;]{4,})", re.IGNORECASE),
+            "medium",
+            group=1,
+            validator=_looks_like_password,
+        ),
+    ),
+    "password_phrase": (
+        Detector(
+            "password_phrase",
+            # EN + PL + mixed phrases: password (for/to/do/dla X)? is/was/to/jest/brzmi <val>
+            _c(r"\b(?:(?:the|my|our|your|user|admin|root|database|db|wifi|account|system|portal|"
+               r"moje|nasze|twoje|nowe|tymczasowe|g[łl][óo]wne|u[żz]ytkownika|administratora|bazy(?:\s+danych)?)\s+)*"
+               r"(?:password|pass|pwd|has[łl]o)\b"
+               r"(?:\s+(?:for|to|do|dla)\s+[^,;:\n]+?)?"
+               r"\s+(?:is|was|equals|to|jest|brzmi|wynosi)\s+[\"']?([^\s\"',;]{4,})", re.IGNORECASE),
+            "medium",
+            group=1,
+            validator=_looks_like_password,
+        ),
+        Detector(
+            "password_phrase",
+            # Combined credentials: login i hasło: a / b
+            _c(r"\b(?:login\s+i\s+has[łl]o|user(?:name)?\s+and\s+password)\s*[:=]\s*[^\s/,;]+(?:\s*[/,]\s*)[\"']?([^\s\"',;]{4,})", re.IGNORECASE),
+            "medium",
+            group=1,
+            validator=_looks_like_password,
+        ),
+        Detector(
+            "password_phrase",
+            # PIN phrases: PIN is 1234, PIN to 1234
+            _c(r"\b(?:my\s+|m[óo]j\s+)?PIN\b\s*(?:is|was|to|jest|wynosi)\s*[:=]?\s*[\"']?([0-9]{4,8})\b", re.IGNORECASE),
             "medium",
             group=1,
             validator=_looks_like_password,

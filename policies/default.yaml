@@ -52,7 +52,7 @@ models:
   - name: ollama-local
     provider: ollama
     base_url_env: AICL_OLLAMA_URL
-    upstream_model: "llama3.2:3b"   # TEAM DECISION: pick after measuring latency
+    upstream_model: "qwen2.5:1.5b"   # TEAM DECISION: Apache-2.0 commercial license, low CPU latency
     local: true
     price_per_1k_tokens: {input: 0.0, output: 0.0}
 
@@ -223,7 +223,7 @@ controls:
     threat_ids: [TH-04]
     enabled: true
     stages: [input]
-    params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment]}
+    params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment, password_phrase]}
     levels:
       strict:     {action: block}
       balanced:   {action: redact}
@@ -246,7 +246,7 @@ controls:
     threat_ids: [TH-04]
     enabled: true
     stages: [output, tool_result]
-    params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment]}
+    params: {types: [aws_access_key, api_key_generic, private_key_block, jwt, password_assignment, password_phrase]}
     levels:
       strict:     {action: block}
       balanced:   {action: redact}
@@ -385,8 +385,8 @@ controls:
 semantic:
   provider: ollama
   base_url_env: AICL_OLLAMA_URL
-  model: "llama3.2:3b"
-  timeout_ms: 5500
+  model: "qwen2.5:1.5b"
+  timeout_ms: 4500
   run_when:
     untrusted_segments: true            # always judge tool output / retrieved docs / uploads
     risk_between: [0.15, 0.85]          # deterministic risk in the grey zone

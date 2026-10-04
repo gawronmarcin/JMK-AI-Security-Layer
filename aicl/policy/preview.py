@@ -93,10 +93,15 @@ def _evaluate_candidate(
 
     # 1. Identity & Profile resolution
     ident = candidate.identities.get(req.identity) if req.identity else None
-    profile = candidate.profile_for(ident) if ident else candidate.raw.active_profile
+    if req.identity and ident is None:
+        candidate_actions.append(Action.block)
+        reasons.append(f"identity '{req.identity}' is not defined in candidate policy")
+        profile = candidate.raw.active_profile
+    else:
+        profile = candidate.profile_for(ident) if ident else candidate.raw.active_profile
 
     # 2. Model allowlist
-    if req.model and req.endpoint == "chat":
+    if req.model:
         if req.model not in candidate.models:
             candidate_actions.append(Action.block)
             reasons.append(f"model '{req.model}' is not in candidate model allowlist")
@@ -109,12 +114,20 @@ def _evaluate_candidate(
             continue
 
         if cfg.mode == "shadow":
-            # Shadow mode never blocks
+            if d.action in (Action.block, Action.require_approval, Action.redact):
+                reasons.append(
+                    f"{d.control_id} switched to shadow mode in candidate policy (action {d.action.value} suppressed)"
+                )
             continue
 
-        # In enforce mode: apply candidate's configured action for this control
+        # In enforce mode:
         configured_action = cfg.action
-        if d.action in (Action.block, Action.require_approval, Action.redact):
+        if d.shadow_suppressed:
+            candidate_actions.append(configured_action)
+            reasons.append(
+                f"{d.control_id} was shadow-suppressed previously, now enforced as {configured_action.value}"
+            )
+        elif d.action in (Action.block, Action.require_approval, Action.redact):
             candidate_actions.append(configured_action)
             if configured_action != d.action:
                 reasons.append(
@@ -129,4 +142,4 @@ def _evaluate_candidate(
             candidate_actions.append(taint_action)
 
     final = strongest_action(candidate_actions) if candidate_actions else Action.allow
-    return final, reasons
+    return final, list(dict.fromkeys(reasons))

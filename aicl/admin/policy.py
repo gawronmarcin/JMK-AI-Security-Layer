@@ -71,6 +71,8 @@ def router(rt: Runtime) -> APIRouter:
                 source = str(parsed_json["policy"])
                 if "last_n" in parsed_json:
                     limit = int(parsed_json["last_n"])
+                elif "limit" in parsed_json:
+                    limit = int(parsed_json["limit"])
         except ValueError:
             pass
 
