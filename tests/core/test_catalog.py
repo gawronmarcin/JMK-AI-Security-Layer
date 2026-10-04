@@ -30,6 +30,16 @@ def test_catalog_entries_are_well_formed():
             assert not bad, f"{t['id']}.{key}: {bad}"
 
 
+def test_all_catalog_threats_have_controls():
+    threats = _threats()
+    for t in threats:
+        controls = t.get("controls")
+        assert isinstance(controls, list), f"{t['id']}.controls must be a list"
+        assert len(controls) >= 1, f"{t['id']} must map to at least one control"
+        for cid in controls:
+            assert re.fullmatch(r"C-[A-Z0-9\-]+", cid), f"invalid control id {cid} in {t['id']}"
+
+
 def test_policy_threat_ids_exist_in_catalog():
     ids = {t["id"] for t in _threats()}
     policy = yaml.safe_load((REPO / "policies" / "default.yaml").read_text(encoding="utf-8"))

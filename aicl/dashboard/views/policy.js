@@ -135,6 +135,16 @@ export function createPolicy(ctx) {
           )))
         ));
       }
+      const limitations = res.limitations || [
+        'Replay re-evaluates candidate profiles, model allowlists, and control modes against recorded audit decisions.',
+        'Historical payloads are not re-submitted to external models or live semantic classifiers.',
+      ];
+      valOut.appendChild(el('div', { class: 'notice notice-info' },
+        el('div', { class: 'bold mb-1', text: 'Replay Scope & Limitations:' }),
+        el('ul', { style: 'margin: 4px 0 0 16px; padding: 0;' },
+          (Array.isArray(limitations) ? limitations : [limitations]).map((lim) => el('li', { text: lim }))
+        )
+      ));
     } catch (err) {
       clear(valOut);
       valOut.appendChild(el('p', { class: 'notice notice-error' }, el('span', { text: `Preview failed: ${err.message}` })));
