@@ -36,6 +36,7 @@ from aicl.audit import AuditWriter, new_event
 from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
+from aicl.flows.mcp import McpResponse, handle_mcp, handle_mcp_delete
 from aicl.flows.tool_invoke import handle_tool_invoke
 from aicl.integrations import (
     classifier_listener,
@@ -179,6 +180,19 @@ def create_app(
         flow = await handle_tool_invoke(rt, _body_reader(request), _headers(request))
         return _respond(flow)
 
+    @app.post("/mcp/{server}")
+    async def mcp_endpoint(server: str, request: Request) -> Response:
+        return _mcp_response(await handle_mcp(rt, server, _body_reader(request), _headers(request)))
+
+    @app.get("/mcp/{server}")
+    async def mcp_stream(server: str) -> Response:
+        # no server-initiated messages: the gateway offers no SSE stream (Streamable HTTP allows 405)
+        return Response(status_code=405, headers={"Allow": "POST, DELETE"})
+
+    @app.delete("/mcp/{server}")
+    async def mcp_end_session(server: str, request: Request) -> Response:
+        return _mcp_response(handle_mcp_delete(rt, server, _headers(request)))
+
     @app.post("/v1/artifacts/scan")
     async def artifacts_scan(request: Request) -> Response:
         flow = await handle_artifact_scan(rt, request, _body_reader(request), _headers(request))
@@ -235,6 +249,12 @@ def _body_reader(request: Request) -> BodyReader:
 
 def _headers(request: Request) -> dict[str, str]:
     return {k.lower(): v for k, v in request.headers.items()}
+
+
+def _mcp_response(resp: McpResponse) -> Response:
+    if resp.body is None:
+        return Response(status_code=resp.status, headers=resp.headers)
+    return JSONResponse(resp.body, status_code=resp.status, headers=resp.headers)
 
 
 def _respond(flow: FlowResponse) -> Response:

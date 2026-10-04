@@ -1,4 +1,4 @@
-# `docker compose up`                       -> gateway :8080 + mock LLM + mock tools
+# `docker compose up`                       -> gateway :8080 + mock LLM + mock tools + mock MCP server
 # `docker compose run --rm tests`           -> pełny suite w kontenerze (§11.8)
 # `docker compose --profile ollama up`      -> dodatkowo prawdziwy Ollama
 # `docker compose --profile hybrid up`      -> + bramka hybrydowa :8081 (policies/hybrid.yaml: bge-m3,
@@ -30,6 +30,13 @@ services:
     ports: ["127.0.0.1:9002:9002"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9002/healthz')"], interval: 5s, retries: 10}
 
+  mock-mcp:
+    # MCP server (Streamable HTTP) behind the gateway's /mcp/docs (tests/mocks/mock_mcp.py)
+    <<: *app
+    command: uvicorn tests.mocks.mock_mcp:app --host 0.0.0.0 --port 9003
+    ports: ["127.0.0.1:9003:9003"]
+    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9003/healthz')"], interval: 5s, retries: 10}
+
   gateway:
     <<: *app
     env_file: [.env.example]
@@ -41,6 +48,7 @@ services:
       AICL_TOOL_FETCH_URL: http://mock-tools:9002/tools/fetch_url
       AICL_TOOL_MAIL_URL: http://mock-tools:9002/tools/send_email
       AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
+      AICL_MCP_DOCS_URL: http://mock-mcp:9003/mcp
       AICL_STATE_URL: ${AICL_STATE_URL_OVERRIDE:-}   # empty = state in the process
       WATCHFILES_FORCE_POLLING: "true"      # hot reload przez bind mount (macOS/Windows, §2)
     volumes:
@@ -53,6 +61,7 @@ services:
     depends_on:
       mock-llm: {condition: service_healthy}
       mock-tools: {condition: service_healthy}
+      mock-mcp: {condition: service_healthy}
 
   tests:
     <<: *app
@@ -101,6 +110,7 @@ services:
       AICL_TOOL_FETCH_URL: http://mock-tools:9002/tools/fetch_url
       AICL_TOOL_MAIL_URL: http://mock-tools:9002/tools/send_email
       AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
+      AICL_MCP_DOCS_URL: http://mock-mcp:9003/mcp
       AICL_STATE_URL: ${AICL_STATE_URL_OVERRIDE:-}
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
@@ -113,6 +123,7 @@ services:
     depends_on:
       mock-llm: {condition: service_healthy}
       mock-tools: {condition: service_healthy}
+      mock-mcp: {condition: service_healthy}
       ollama-init: {condition: service_completed_successfully}
 
   redis:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 from fake_upstream import make_fake_upstream
 from policy_files import merge, write_policy
 
@@ -21,6 +22,7 @@ ENV = {
     "AICL_KEY_ADMIN": KEYS["admin"],
     "AICL_UPSTREAM_MOCK_URL": "http://mock",
 }
+FEED_VERSION = yaml.safe_load((REPO / "feeds" / "attacks.yaml").read_text(encoding="utf-8"))["feed_version"]
 AWS = "AKIA" + "Z7Q2M4XK9P3L8W1N"  # split so secret scanners don't flag the repo
 
 
@@ -93,7 +95,7 @@ async def test_clean_request_passes_through(gw):
     e = await gw.request_event(r)
     assert e.identity == "support-agent-01" and e.role == "support_agent" and e.profile == "balanced"
     assert e.final_action == Action.allow and e.upstream_called
-    assert e.feed_version == "2026-10-03.2"
+    assert e.feed_version == FEED_VERSION
     assert e.usage.prompt_tokens == 100 and e.usage.cost_usd == pytest.approx(0.000125)
     assert {d.control_id for d in e.decisions} >= {"C-PII-IN", "C-PII-OUT"}
 
@@ -338,7 +340,7 @@ async def test_startup_events(gw):
     assert started.detail["reason"] == "startup"
     assert started.detail["missing_controls"] == []
     feed = next(e for e in events if e.type == "feed.reloaded")
-    assert feed.detail["status"] == "loaded" and feed.feed_version == "2026-10-03.2"
+    assert feed.detail["status"] == "loaded" and feed.feed_version == FEED_VERSION
 
 
 async def test_healthz(gw):
@@ -346,7 +348,7 @@ async def test_healthz(gw):
     body = r.json()
     assert body["status"] == "ok"
     assert body["policy_version"] == gw.app.state.runtime.policy.version
-    assert body["feed_version"] == "2026-10-03.2"
+    assert body["feed_version"] == FEED_VERSION
     # AI detectors as configured (public endpoint: no URLs); default policy has no classifier backend
     assert body["detectors"]["classifier"] == {"backend": "none", "ready": False, "error": None}
     assert set(body["detectors"]["judge"]) == {"model", "ready", "timeout_ms"}

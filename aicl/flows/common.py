@@ -535,6 +535,17 @@ def string_leaves(value: Any) -> list[tuple[list[Any], str]]:
     return leaves
 
 
+_DESCRIPTION_KEYS = frozenset({"description", "title"})
+
+
+def description_leaves(value: Any, path: list[Any]) -> list[tuple[list[Any], str]]:
+    """`description` / `title` strings anywhere in a tool definition (JSON schema included)."""
+    return [
+        (path + p, text) for p, text in string_leaves(value)
+        if p and isinstance(p[-1], str) and p[-1] in _DESCRIPTION_KEYS
+    ]
+
+
 def extract_tool_arg_segments(
     tool_args: Any,
     origin: Origin,

@@ -2,7 +2,7 @@
 # Externally managed: hot-reloaded, an invalid file keeps the last good version.
 # Bump feed_version on every change; it is recorded in each audit event.
 
-feed_version: "2026-10-03.2"
+feed_version: "2026-10-04.1"
 signatures:
   - id: SIG-PKL-001
     set: artifact                       # injection | artifact | code_exec | supply_chain | exfil
@@ -240,6 +240,16 @@ signatures:
     description: "Authority claim used to justify an override (grey zone)"
     refs: ["OWASP LLM01:2025"]
     added: "2026-10-03"
+
+  - id: SIG-INJ-018
+    set: injection
+    kind: regex
+    # send/forward the conversation to an external URL: an instruction no user-facing text needs
+    pattern: '(?i)\b(?:send|forward|upload|post|email|e-mail|exfiltrate|leak)\b[^.\n]{0,40}\b(?:chat|conversation|session)\W+(?:history|log|logs|transcript|contents?)\b[^.\n]{0,40}https?://'
+    severity: high
+    description: "Conversation exfiltration to an external URL (indirect injection payload)"
+    refs: ["OWASP LLM01:2025", "OWASP LLM02:2025", "AML.T0057"]
+    added: "2026-10-04"
 
   - id: SIG-SUPPLY-001
     set: supply_chain

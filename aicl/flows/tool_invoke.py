@@ -14,7 +14,7 @@ Stages:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -38,7 +38,8 @@ from aicl.flows.common import (
 )
 from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
-from aicl.proxy import UpstreamError
+from aicl.policy.schema import ToolSpec
+from aicl.proxy import UpstreamError, UpstreamResponse
 from aicl.runtime import Runtime
 
 
@@ -91,6 +92,112 @@ def _parse(raw: bytes) -> tuple[ToolInvokeRequest, dict[str, Any]]:
         raise GatewayError(ErrorType.bad_request, f"{loc}: {first['msg']}") from exc
 
 
+# Sends the (checked, possibly redacted) arguments to the tool's backend.
+Forward = Callable[[ToolSpec, dict[str, Any]], Awaitable[UpstreamResponse]]
+
+
+async def forward_tool(
+    rt: Runtime, rec: RequestRecord, tool: str, spec: ToolSpec, args: dict[str, Any], headers: Mapping[str, str]
+) -> UpstreamResponse:
+    """HTTP backend (POST {tool, arguments}) or MCP server (tools/call), as the policy says."""
+    if spec.mcp_server is None:
+        return await rt.upstream.invoke_tool(spec, tool, args, headers)
+    server = rec.policy.raw.mcp_servers[spec.mcp_server]
+    name = tool.split(".", 1)[1]
+    res = await rt.upstream.mcp.request(spec.mcp_server, server, rt.env, rec.session_id, "tools/call",
+                                        {"name": name, "arguments": args})
+    return UpstreamResponse(body=res.result, latency_ms=res.latency_ms)
+
+
+async def govern_tool_call(
+    rt: Runtime, rec: RequestRecord, tool: str, args: dict[str, Any], forward: Forward
+) -> dict[str, Any]:
+    """The tool pipeline for an authenticated request (shared by /v1/tools/invoke and MCP
+    tools/call): ingress -> argument scan -> tool_call controls -> forward -> result scan.
+    Returns the (redacted) result; raises GatewayError on block / approval / budget."""
+    policy = rec.policy
+    identity = rec.identity
+    assert identity is not None and rec.profile is not None
+    session = await rt.state.get_session(rec.session_id)
+
+    ctx = RequestContext(
+        request_id=rec.request_id,
+        session_id=rec.session_id,
+        endpoint=rec.endpoint,
+        stage=Stage.ingress,
+        identity=identity.id,
+        role=identity.role,
+        profile=rec.profile,
+        model=None,
+        segments=[],
+        tool=tool,
+        tool_args=args,
+        tainted=session.tainted,
+        policy_version=policy.version,
+    )
+
+    # 1. Ingress stage (auth is done, C-BUDGET rate/token check, C-SIZE check)
+    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)), rec)
+
+    # 2. Input stage (scan arguments for C-SECRET-IN, C-PII-IN, C-INJ-PAT, C-INJ-SEM)
+    requested_args = args  # as sent by the client: what an operator approval is bound to
+    arg_segments = extract_tool_arg_segments(args, origin=Origin.user, tool_name=tool)
+    if arg_segments:
+        input_ctx = ctx.model_copy(update={"stage": Stage.input, "segments": arg_segments})
+        input_result = rec.add_stage(await run_stage(policy, input_ctx, Stage.input, rt.controls))
+        stop_if_blocked(input_result, rec)
+        if input_result.action == Action.redact:
+            args = apply_redacted_args(args, input_result.segments)
+            spec = policy.raw.tools.get(tool)
+            args = keep_args(args, requested_args, spec.no_redact_args if spec else [])
+
+    # 3. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT, C-CANARY, C-CODE-EXEC, C-MEM-ACL)
+    call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool_args": args})
+    stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec,
+                    subject={"tool": tool, "args": requested_args})
+
+    # Verify tool exists in policy definition
+    tool_spec = policy.raw.tools.get(tool)
+    if tool_spec is None:
+        raise GatewayError(ErrorType.bad_request, f"unknown tool {tool!r}")
+
+    # 3. Forward to tool backend
+    try:
+        upstream = await forward(tool_spec, args)
+    except UpstreamError as exc:
+        raise GatewayError(ErrorType.upstream_error, str(exc)) from exc
+    rec.upstream_called = True
+    rec.upstream_ms = upstream.latency_ms
+    body = dict(upstream.body)
+
+    rec.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_usd=0.0,
+        compute_seconds=round(upstream.latency_ms / 1000, 3),
+    )
+
+    # 4. Tool result stage (C-PII-OUT, C-SECRET-OUT, C-INJ-PAT, C-INJ-SEM): every string in the
+    # backend's JSON is inspected, not only `output`/`result`; everything goes back to the client
+    trust: Trust = tool_spec.output_trust
+    result_segments = _result_segments(body, tool, trust)
+
+    res_ctx = ctx.model_copy(update={"stage": Stage.tool_result, "segments": result_segments})
+    result = rec.add_stage(await run_stage(policy, res_ctx, Stage.tool_result, rt.controls))
+    stop_if_blocked(result, rec)
+
+    # Mark session tainted if tool output is untrusted or if a control marked it
+    if trust == "untrusted" or result.taints_session:
+        await rt.state.mark_tainted(rec.session_id, f"tool:{tool}")
+
+    if result.action == Action.redact:
+        changed = [s for s in result.segments if s.text != result_segments[s.idx].text]
+        if any(s.meta.get("overflow") for s in changed):
+            fail_closed_redaction(result, "a tool result with too many fields")
+        body = apply_redacted_args(body, changed)
+    return body
+
+
 async def handle_tool_invoke(rt: Runtime, read_body: BodyReader, headers: Mapping[str, str]) -> FlowResponse:
     rec = RequestRecord(rt=rt, endpoint="tool_invoke", headers=headers)
     try:
@@ -104,7 +211,6 @@ async def handle_tool_invoke(rt: Runtime, read_body: BodyReader, headers: Mappin
 async def _run(
     rt: Runtime, rec: RequestRecord, read_body: BodyReader, headers: Mapping[str, str]
 ) -> FlowResponse:
-    policy = rec.policy
     identity = rec.authenticate()
     req, _ = _parse(await rec.read_body(read_body))
     if req.session_id:
@@ -124,83 +230,10 @@ async def _run(
     )
     assert rec.profile is not None
 
-    session = await rt.state.get_session(rec.session_id)
+    async def forward(tool_spec: ToolSpec, call_args: dict[str, Any]) -> UpstreamResponse:
+        return await forward_tool(rt, rec, req.tool, tool_spec, call_args, headers)
 
-    ctx = RequestContext(
-        request_id=rec.request_id,
-        session_id=rec.session_id,
-        endpoint="tool_invoke",
-        stage=Stage.ingress,
-        identity=identity.id,
-        role=identity.role,
-        profile=rec.profile,
-        model=None,
-        segments=[],
-        tool=req.tool,
-        tool_args=args,
-        tainted=session.tainted,
-        policy_version=policy.version,
-    )
-
-    # 1. Ingress stage (auth is done, C-BUDGET rate/token check, C-SIZE check)
-    stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)), rec)
-
-    # 2. Input stage (scan arguments for C-SECRET-IN, C-PII-IN, C-INJ-PAT, C-INJ-SEM)
-    requested_args = args  # as sent by the client: what an operator approval is bound to
-    arg_segments = extract_tool_arg_segments(args, origin=Origin.user, tool_name=req.tool)
-    if arg_segments:
-        input_ctx = ctx.model_copy(update={"stage": Stage.input, "segments": arg_segments})
-        input_result = rec.add_stage(await run_stage(policy, input_ctx, Stage.input, rt.controls))
-        stop_if_blocked(input_result, rec)
-        if input_result.action == Action.redact:
-            args = apply_redacted_args(args, input_result.segments)
-            spec = policy.raw.tools.get(req.tool)
-            args = keep_args(args, requested_args, spec.no_redact_args if spec else [])
-
-    # 3. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT, C-CANARY, C-CODE-EXEC, C-MEM-ACL)
-    call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool_args": args})
-    stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec,
-                    subject={"tool": req.tool, "args": requested_args})
-
-    # Verify tool exists in policy definition
-    tool_spec = policy.raw.tools.get(req.tool)
-    if tool_spec is None:
-        raise GatewayError(ErrorType.bad_request, f"unknown tool {req.tool!r}")
-
-    # 3. Forward to tool backend
-    try:
-        upstream = await rt.upstream.invoke_tool(tool_spec, req.tool, args, headers)
-    except UpstreamError as exc:
-        raise GatewayError(ErrorType.upstream_error, str(exc)) from exc
-    rec.upstream_called = True
-    rec.upstream_ms = upstream.latency_ms
-    body = dict(upstream.body)
-
-    rec.usage = Usage(
-        prompt_tokens=0,
-        completion_tokens=0,
-        cost_usd=0.0,
-        compute_seconds=round(upstream.latency_ms / 1000, 3),
-    )
-
-    # 4. Tool result stage (C-PII-OUT, C-SECRET-OUT, C-INJ-PAT, C-INJ-SEM): every string in the
-    # backend's JSON is inspected, not only `output`/`result`; everything goes back to the client
-    trust: Trust = tool_spec.output_trust
-    result_segments = _result_segments(body, req.tool, trust)
-
-    res_ctx = ctx.model_copy(update={"stage": Stage.tool_result, "segments": result_segments})
-    result = rec.add_stage(await run_stage(policy, res_ctx, Stage.tool_result, rt.controls))
-    stop_if_blocked(result, rec)
-
-    # Mark session tainted if tool output is untrusted or if a control marked it
-    if trust == "untrusted" or result.taints_session:
-        await rt.state.mark_tainted(rec.session_id, f"tool:{req.tool}")
-
-    if result.action == Action.redact:
-        changed = [s for s in result.segments if s.text != result_segments[s.idx].text]
-        if any(s.meta.get("overflow") for s in changed):
-            fail_closed_redaction(result, "a tool result with too many fields")
-        body = apply_redacted_args(body, changed)
+    body = await govern_tool_call(rt, rec, req.tool, args, forward)
 
     headers_out: dict[str, str] = {}
     if req.tool in DELEGATION_TOOLS:

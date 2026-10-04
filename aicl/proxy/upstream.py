@@ -52,11 +52,20 @@ class UpstreamClient:
         self._timeout = timeout_s
         self._client: httpx.AsyncClient | None = None
         self._tool_client: httpx.AsyncClient | None = None
+        from aicl.proxy.mcp import McpClient  # here: aicl.proxy.mcp imports this module
+
+        self.mcp = McpClient(self)  # upstream MCP sessions (aicl/proxy/mcp.py)
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(transport=self._transport, timeout=self._timeout)
         if self._tool_transport is not None:
             self._tool_client = httpx.AsyncClient(transport=self._tool_transport, timeout=self._timeout)
+
+    def tool_http(self) -> httpx.AsyncClient:
+        """The HTTP client for tool backends and MCP servers (its own transport in tests)."""
+        if self._client is None:
+            raise RuntimeError("UpstreamClient not started")
+        return self._tool_client if self._tool_client is not None else self._client
 
     async def stop(self) -> None:
         if self._client is not None:
@@ -105,13 +114,13 @@ class UpstreamClient:
     ) -> UpstreamResponse:
         if self._client is None:
             raise RuntimeError("UpstreamClient not started")
-        backend_url = self.env.get(tool_spec.backend_url_env)
+        backend_url = self.env.get(tool_spec.backend_url_env) if tool_spec.backend_url_env else None
         if not backend_url:
             raise UpstreamError(
                 f"backend for tool {tool_name!r} not configured ({tool_spec.backend_url_env} unset)"
             )
 
-        client = self._tool_client if self._tool_client is not None else self._client
+        client = self.tool_http()
         payload = {"tool": tool_name, "arguments": arguments}
         fwd = {k: v for k, v in headers.items() if k.lower() in FORWARDED_HEADERS}
         start = time.perf_counter()
