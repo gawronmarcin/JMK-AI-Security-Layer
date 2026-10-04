@@ -167,7 +167,7 @@ async def test_gateway_hitl_approval_flow(tmp_path):
         session_id = "sess_hitl_01"
 
         # Taint session in runtime
-        await app.state.runtime.state.mark_tainted(session_id, "untrusted_input")
+        await app.state.runtime.state.mark_tainted(f"support-agent-01:{session_id}", "untrusted_input")
 
         invoke_payload = {
             "session_id": session_id,
@@ -241,7 +241,7 @@ def _auth(who: str, approval_id: str | None = None) -> dict[str, str]:
 
 
 async def _ask_and_approve(app, client, session: str, body: dict = EMAIL) -> str:
-    await app.state.runtime.state.mark_tainted(session, "untrusted_input")
+    await app.state.runtime.state.mark_tainted(f"support-agent-01:{session}", "untrusted_input")
     r = await client.post("/v1/tools/invoke", json={**body, "session_id": session}, headers=_auth("support"))
     assert r.status_code == 403 and r.json()["error"]["type"] == "aicl_approval_required"
     approval_id = r.json()["error"]["approval_id"]
@@ -280,7 +280,7 @@ async def test_approval_does_not_cover_other_arguments(tmp_path):
 async def test_approval_does_not_cover_other_identity(tmp_path):
     async with _gateway(tmp_path) as (app, client):
         approval_id = await _ask_and_approve(app, client, "s3")
-        await app.state.runtime.state.mark_tainted("s3-admin", "untrusted_input")
+        await app.state.runtime.state.mark_tainted("admin:s3-admin", "untrusted_input")
         r = await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s3-admin"},
                               headers=_auth("admin", approval_id))
         assert r.status_code == 403
@@ -298,7 +298,7 @@ async def test_expired_approval_is_refused(tmp_path):
 
 async def test_retries_reuse_the_pending_approval_and_operator_sees_the_action(tmp_path):
     async with _gateway(tmp_path) as (app, client):
-        await app.state.runtime.state.mark_tainted("s5", "untrusted_input")
+        await app.state.runtime.state.mark_tainted("support-agent-01:s5", "untrusted_input")
         body = {**EMAIL, "session_id": "s5"}
         ids = set()
         for _ in range(3):

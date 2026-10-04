@@ -394,7 +394,11 @@ def _scan(text: str, detectors: Iterable[Detector]) -> Iterator[tuple[Detector, 
             yield d, start, end, raw
 
 
-_INPUT_ORIGINS = frozenset({Origin.user, Origin.tool_result, Origin.retrieved, Origin.artifact})
+# Earlier assistant turns are client-supplied too (and may be forged), so they are input.
+# The system prompt is left out for PII on purpose (a support mailbox there is not user PII),
+# but not for secrets: a credential in it still goes to the (possibly commercial) upstream.
+_INPUT_ORIGINS = frozenset({Origin.user, Origin.assistant, Origin.tool_result, Origin.retrieved, Origin.artifact})
+_SECRET_INPUT_ORIGINS = _INPUT_ORIGINS | {Origin.system}
 _OUTPUT_ORIGINS = frozenset({Origin.assistant, Origin.tool_result, Origin.retrieved, Origin.artifact})
 
 
@@ -419,12 +423,13 @@ class _ContentControl:
     priority: int = 20                       # deterministic, cheap: < 100
     registry: dict[str, tuple[Detector, ...]]
     scan_decoded: bool = False
+    input_origins: frozenset[Origin] = _INPUT_ORIGINS
 
     async def evaluate(self, ctx: RequestContext, cfg: Any) -> Decision:
         action = Action(_cfg_get(cfg, "action", Action.flag))
         wanted = _cfg_get(cfg, "types", None) or list(self.registry)
         detectors = [d for t in wanted for d in self.registry.get(t, ())]
-        origins = _OUTPUT_ORIGINS if ctx.stage == Stage.output else _INPUT_ORIGINS
+        origins = _OUTPUT_ORIGINS if ctx.stage == Stage.output else self.input_origins
 
         matches: list[Match] = []
         seen: set[tuple[str, int, int, int]] = set()
@@ -495,6 +500,7 @@ class SecretsInput(_ContentControl):
     stages = (Stage.input,)
     registry = SECRET_DETECTORS
     scan_decoded = True
+    input_origins = _SECRET_INPUT_ORIGINS
 
 
 @register_control

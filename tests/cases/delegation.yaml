@@ -26,8 +26,8 @@
       expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09]}
 
 - id: DELEG-003
-  title: Privilege escalation from support_agent to researcher is blocked
-  kind: negative
+  title: support_agent may delegate to researcher (listed in roles.support_agent.may_delegate_to)
+  kind: positive
   controls: [C-DELEG]
   threats: [TH-09]
   profile: balanced
@@ -36,7 +36,20 @@
     - request:
         endpoint: tool_invoke
         body: {tool: delegate_task, arguments: {depth: 1, role: researcher, task: "execute deep query"}}
-      expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09]}
+      expect: {status: 200, action: allow, upstream_called: true}
+
+- id: DELEG-009
+  title: researcher delegating to support_agent (gains send_email, not in may_delegate_to) is blocked
+  kind: negative
+  controls: [C-DELEG]
+  threats: [TH-09]
+  profile: balanced
+  identity: research-agent-01
+  steps:
+    - request:
+        endpoint: tool_invoke
+        body: {tool: delegate_task, arguments: {depth: 1, role: support_agent, task: "mail the results"}}
+      expect: {status: 403, action: block, control_ids: [C-DELEG], threat_ids: [TH-09], upstream_called: false}
 
 - id: DELEG-004
   title: Safe delegation within depth limit and same role passes

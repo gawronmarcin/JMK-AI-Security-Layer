@@ -2,25 +2,37 @@
 
     C-AUTH -> ingress -> input -> upstream -> output (+ tool_call per proposed call) -> post
 
-Each message becomes one segment with idx = message index; response choices get
-idx = len(messages) + choice index, so audit segment_idx values never collide.
+Every text that reaches the model or the client is a segment. Each message is one segment with
+idx = message index (its text parts joined); then come the other request fields: message `name`,
+text inside data: URLs of content parts, arguments of earlier tool calls (`tool_calls`,
+legacy `function_call`) and descriptions in `tools[]` / `functions[]` (tool poisoning).
+Response segments (choice content, `refusal`, `reasoning_content`, tool-call arguments) take
+the next free indexes, so audit segment_idx values never collide. `meta` says which field a
+segment came from; redactions are written back there, and a redaction that cannot be written
+back (text decoded from a data: URL) blocks.
 
-Provisional choices, to be confirmed with the detectors team:
-  * tool-call arguments are not turned into segments yet (only ctx.tool / ctx.tool_args);
+Ingress controls (C-SIZE counts messages) see the message segments only; input controls see all.
+Tool descriptions are third-party text: origin tool_result (indirect injection, TH-02) but
+trusted, so they neither taint the session nor always wake the semantic judge.
+
   * if any proposed tool call is blocked, the whole response is blocked;
-  * non-text content parts (images, audio) are not inspected; their count goes to segment meta.
+  * images and audio themselves are not inspected; their count goes to segment meta.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
+import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aicl.controls.canary import canary_tokens
-from aicl.engine import run_stage
+from aicl.engine import StageResult, run_stage
 from aicl.errors import GatewayError
 from aicl.flows.common import (
     BodyReader,
@@ -29,8 +41,10 @@ from aicl.flows.common import (
     account_usage,
     apply_redacted_args,
     extract_tool_arg_segments,
+    fail_closed_redaction,
     keep_args,
     stop_if_blocked,
+    string_leaves,
 )
 from aicl.models import Action, ErrorType, Origin, Profile, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
@@ -63,20 +77,108 @@ class ChatRequest(BaseModel):
     stream: bool = False
 
 
+_TEXT_KEYS = ("text", "refusal")  # content-part keys holding text, whatever the part `type`
+_DATA_URL_MIMES = ("text/", "application/json", "application/xml")
+MAX_DATA_URL_CHARS = 100_000
+_DESCRIPTION_KEYS = frozenset({"description", "title"})
+# Above this many characters the input segments are built in a worker thread (normalization
+# and decoding are CPU-bound and would stall every other request on the event loop).
+THREAD_SEGMENTS_CHARS = 20_000
+
+
+def _part_text_key(part: Any) -> str | None:
+    if isinstance(part, dict):
+        return next((k for k in _TEXT_KEYS if isinstance(part.get(k), str)), None)
+    return None
+
+
 def _text_of(content: str | list[dict[str, Any]] | None) -> tuple[str, int]:
-    """(text, number of non-text parts) for OpenAI string or content-part messages."""
+    """(text, number of non-text parts) for OpenAI string or content-part messages.
+
+    Any part with a string `text` (or `refusal`) counts: `text`, `input_text`, `output_text`...
+    """
     if content is None:
         return "", 0
     if isinstance(content, str):
         return content, 0
-    texts = [p.get("text", "") for p in content if p.get("type") == "text"]
-    return "\n".join(t for t in texts if isinstance(t, str)), sum(
-        1 for p in content if p.get("type") != "text"
-    )
+    keys = [_part_text_key(p) for p in content]
+    texts = [p[k] for p, k in zip(content, keys) if k is not None]
+    return "\n".join(texts), sum(1 for k in keys if k is None)
 
 
-def _input_segments(req: ChatRequest) -> list[Segment]:
-    segments = []
+def _set_text(msg: dict[str, Any], text: str) -> None:
+    """Write a (redacted) message text back: a string stays a string; in a content-part list the
+    first text part gets the whole text and the other text parts go, images and the rest stay."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        msg["content"] = text
+        return
+    out, written = [], False
+    for part in content:
+        key = _part_text_key(part)
+        if key is None:
+            out.append(part)
+        elif not written:
+            out.append({**part, key: text})
+            written = True
+    msg["content"] = out if written else [*out, {"type": "text", "text": text}]
+
+
+def _data_url_text(url: str) -> str | None:
+    """Text carried by a data: URL with a textual media type (`data:text/plain,Ignore all...`)."""
+    header, sep, payload = url[5:].partition(",")
+    if not sep:
+        return None
+    mime, *params = [p.strip().lower() for p in header.split(";")]
+    if not (mime or "text/plain").startswith(_DATA_URL_MIMES):
+        return None
+    try:
+        raw = base64.b64decode(payload) if "base64" in params else urllib.parse.unquote_to_bytes(payload)
+    except (ValueError, binascii.Error):
+        return None
+    return raw[: MAX_DATA_URL_CHARS * 4].decode("utf-8", errors="replace")[:MAX_DATA_URL_CHARS]
+
+
+def _data_url_texts(content: Any) -> list[str]:
+    """Texts hidden in data: URLs of non-text parts (image_url, file, input_file...)."""
+    if not isinstance(content, list):
+        return []
+    found = []
+    for part in content:
+        if _part_text_key(part) is not None:
+            continue
+        for _, value in string_leaves(part):
+            if value.startswith("data:") and (text := _data_url_text(value)) and text.strip():
+                found.append(text)
+    return found
+
+
+def _call_arg_leaves(raw_args: Any) -> list[tuple[list[Any] | None, str]]:
+    """(path, text) inside tool-call arguments: a JSON string is parsed, paths point into it;
+    a string that is not JSON is one leaf with path None."""
+    args = raw_args
+    if isinstance(raw_args, str):
+        try:
+            args = json.loads(raw_args)
+        except ValueError:
+            return [(None, raw_args)] if raw_args.strip() else []
+    if isinstance(args, str):
+        return [(None, raw_args)] if raw_args.strip() else []
+    return [(path, text) for path, text in string_leaves(args)]
+
+
+def _description_leaves(value: Any, path: list[Any]) -> list[tuple[list[Any], str]]:
+    """`description` / `title` strings anywhere in a tool definition (JSON schema included)."""
+    return [
+        (path + p, text) for p, text in string_leaves(value)
+        if p and isinstance(p[-1], str) and p[-1] in _DESCRIPTION_KEYS
+    ]
+
+
+def _input_segments(req: ChatRequest, data: dict[str, Any]) -> tuple[list[Segment], list[Segment]]:
+    """(message segments, every input segment): see the module docstring for the fields."""
+    messages = []
+    extra: list[tuple[str, Origin, Trust, dict[str, Any]]] = []
     for i, msg in enumerate(req.messages):
         origin = _ROLE_ORIGIN.get(msg.role)
         if origin is None:
@@ -84,8 +186,77 @@ def _input_segments(req: ChatRequest) -> list[Segment]:
         text, non_text = _text_of(msg.content)
         meta = {"role": msg.role} | ({"non_text_parts": non_text} if non_text else {})
         trust: Trust = "untrusted" if origin == Origin.tool_result else "trusted"
-        segments.append(build_segment(i, text, origin, trust, meta))
-    return segments
+        messages.append(build_segment(i, text, origin, trust, meta))
+
+        raw = data["messages"][i]
+        where = {"role": msg.role, "message": i}
+        name = raw.get("name")
+        if isinstance(name, str) and name.strip():
+            extra.append((name, origin, trust, {**where, "field": "name"}))
+        for url_text in _data_url_texts(msg.content):
+            extra.append((url_text, origin, trust, {**where, "field": "data_url"}))
+        calls = [(j, c) for j, c in enumerate(raw.get("tool_calls") or []) if isinstance(c, dict)]
+        if isinstance(raw.get("function_call"), dict):
+            calls.append((None, {"function": raw["function_call"]}))
+        for j, call in calls:
+            fn = call.get("function")
+            if not isinstance(fn, dict):
+                continue
+            for path, arg_text in _call_arg_leaves(fn.get("arguments")):
+                call_meta = {**where, "field": "call_arguments", "call": j, "arg_path": path}
+                extra.append((arg_text, Origin.assistant, "trusted", call_meta))
+
+    for key in ("tools", "functions"):
+        defs = data.get(key)
+        for k, tool in enumerate(defs if isinstance(defs, list) else []):
+            for path, desc in _description_leaves(tool, [key, k]):
+                extra.append((desc, Origin.tool_result, "trusted", {"field": "tool_definition", "data_path": path}))
+
+    base = len(messages)
+    extras = [build_segment(base + n, t, o, tr, m) for n, (t, o, tr, m) in enumerate(extra)]
+    return messages, messages + extras
+
+
+def _set_path(root: Any, path: list[Any], value: Any) -> None:
+    node = root
+    for p in path[:-1]:
+        node = node[p]
+    node[path[-1]] = value
+
+
+def _write_back_input(data: dict[str, Any], before: list[Segment], after: list[Segment],
+                      result: StageResult) -> None:
+    """Put redacted input segments back into the request body (see the module docstring)."""
+    original = {s.idx: s for s in before}
+    changed = [s for s in after if s.text != original[s.idx].text]
+    calls: dict[tuple[int, int | None], list[Segment]] = {}
+    for seg in changed:
+        field = seg.meta.get("field")
+        if field is None:
+            _set_text(data["messages"][seg.idx], seg.text)
+        elif field == "name":
+            data["messages"][seg.meta["message"]]["name"] = seg.text
+        elif field == "tool_definition":
+            _set_path(data, seg.meta["data_path"], seg.text)
+        elif field == "call_arguments":
+            calls.setdefault((seg.meta["message"], seg.meta["call"]), []).append(seg)
+        else:  # data_url: the text was decoded, there is nothing to cut it out of
+            fail_closed_redaction(result, f"messages[{seg.meta.get('message')}] {field}")
+    for (i, j), segs in calls.items():
+        msg = data["messages"][i]
+        fn = msg["function_call"] if j is None else msg["tool_calls"][j]["function"]
+        _set_call_arguments(fn, segs)
+
+
+def _set_call_arguments(fn: dict[str, Any], segs: list[Segment]) -> None:
+    """Redacted strings back into a call's arguments, keeping their form (JSON string or object)."""
+    raw = fn.get("arguments")
+    if len(segs) == 1 and segs[0].meta.get("arg_path") is None:
+        fn["arguments"] = segs[0].text
+        return
+    args = json.loads(raw) if isinstance(raw, str) else raw
+    args = apply_redacted_args(args, segs)
+    fn["arguments"] = json.dumps(args, ensure_ascii=False) if isinstance(raw, str) else args
 
 
 def _parse(raw: bytes) -> tuple[ChatRequest, dict[str, Any]]:
@@ -103,11 +274,17 @@ def _parse(raw: bytes) -> tuple[ChatRequest, dict[str, Any]]:
         raise GatewayError(ErrorType.bad_request, f"{loc}: {first['msg']}") from exc
 
 
-def _tool_calls(choice: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+def _tool_calls(choice: dict[str, Any]) -> list[tuple[int | None, str, dict[str, Any]]]:
+    """(index in `tool_calls` or None for the legacy `function_call`, tool name, arguments)."""
+    msg = choice.get("message") or {}
+    fns: list[tuple[int | None, Any]] = [
+        (j, call.get("function") or {}) for j, call in enumerate(msg.get("tool_calls") or [])
+    ]
+    if msg.get("function_call") is not None:
+        fns.append((None, msg["function_call"]))
     calls = []
-    for call in (choice.get("message") or {}).get("tool_calls") or []:
-        fn = call.get("function") or {}
-        name = fn.get("name")
+    for j, fn in fns:
+        name = fn.get("name") if isinstance(fn, dict) else None
         if not isinstance(name, str):
             raise UpstreamError("tool call without a function name")
         raw_args = fn.get("arguments") or "{}"
@@ -115,8 +292,25 @@ def _tool_calls(choice: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except ValueError:
             args = {"_unparsed": raw_args}
-        calls.append((name, args if isinstance(args, dict) else {"_value": args}))
+        calls.append((j, name, args if isinstance(args, dict) else {"_value": args}))
     return calls
+
+
+_OUTPUT_TEXT_FIELDS = ("refusal", "reasoning_content", "reasoning")  # besides `content`
+
+
+def _output_segments(choices: list[dict[str, Any]], base: int) -> list[Segment]:
+    """Choice texts the client gets: `content` and the extra text fields some upstreams add."""
+    segments: list[Segment] = []
+    for i, choice in enumerate(choices):
+        msg = choice.get("message") or {}
+        text, _ = _text_of(msg.get("content"))
+        segments.append(build_segment(base + len(segments), text, Origin.assistant, meta={"choice": i}))
+        for field in _OUTPUT_TEXT_FIELDS:
+            if isinstance(msg.get(field), str) and msg[field].strip():
+                meta = {"choice": i, "field": field}
+                segments.append(build_segment(base + len(segments), msg[field], Origin.assistant, meta=meta))
+    return segments
 
 
 def _usage(
@@ -150,10 +344,17 @@ async def _run(
 ) -> FlowResponse:
     policy = rec.policy
     identity = rec.authenticate()
-    req, data = _parse(await rec.read_body(read_body))
+    raw_body = await rec.read_body(read_body)
+    req, data = _parse(raw_body)
     rec.model = req.model
-    segments = _input_segments(req)
     assert rec.profile is not None
+    # C-SIZE message limits before the (CPU-heavy) segments are built
+    rec.check_message_sizes(len(req.messages), [len(_text_of(m.content)[0]) for m in req.messages])
+    await rec.join_delegation()
+    if len(raw_body) > THREAD_SEGMENTS_CHARS:
+        message_segments, segments = await anyio.to_thread.run_sync(_input_segments, req, data)
+    else:
+        message_segments, segments = _input_segments(req, data)
 
     # §5.4: untrusted content (tool results) entering the session taints it; C-TAINT then
     # blocks privileged tool calls for the rest of the session.
@@ -169,7 +370,7 @@ async def _run(
         role=identity.role,
         profile=rec.profile,
         model=req.model,
-        segments=segments,
+        segments=message_segments,
         tainted=(await rt.state.get_session(rec.session_id)).tainted,
         policy_version=policy.version,
     )
@@ -180,14 +381,13 @@ async def _run(
     if model is None:
         raise GatewayError(ErrorType.bad_request, f"unknown model {req.model!r}")
 
+    ctx = ctx.model_copy(update={"segments": segments})
     result = rec.add_stage(await run_stage(policy, ctx, Stage.input, rt.controls))
     stop_if_blocked(result, rec)
     if result.taints_session:
         await rt.state.mark_tainted(rec.session_id, "input")
     if result.action == Action.redact:
-        for seg in result.segments:
-            if seg.text != segments[seg.idx].text:
-                data["messages"][seg.idx]["content"] = seg.text
+        _write_back_input(data, segments, result.segments, result)
     ctx = ctx.model_copy(update={"risk": result.risk})
 
     upstream_data = {k: v for k, v in data.items() if k != "stream"}
@@ -206,11 +406,7 @@ async def _run(
 
     try:
         choices = [c for c in body["choices"] if isinstance(c, dict)]
-        base = len(req.messages)
-        out_segments = []
-        for i, choice in enumerate(choices):
-            text, _ = _text_of((choice.get("message") or {}).get("content"))
-            out_segments.append(build_segment(base + i, text, Origin.assistant))
+        out_segments = _output_segments(choices, base=len(segments))
         proposed = [(i, call) for i, choice in enumerate(choices) for call in _tool_calls(choice)]
     except UpstreamError as exc:
         raise GatewayError(ErrorType.upstream_error, str(exc)) from exc
@@ -227,14 +423,23 @@ async def _run(
     result = rec.add_stage(await run_stage(policy, out_ctx, Stage.output, rt.controls))
     stop_if_blocked(result, rec)
     if result.action == Action.redact:
+        original = {s.idx: s.text for s in out_segments}
         for seg in result.segments:
-            choices[seg.idx - base].setdefault("message", {})["content"] = seg.text
+            if seg.text != original[seg.idx]:
+                msg = choices[seg.meta["choice"]].setdefault("message", {})
+                field = seg.meta.get("field")
+                if field is None:
+                    _set_text(msg, seg.text)
+                else:
+                    msg[field] = seg.text
 
-    for choice_idx, (tool, args) in proposed:
+    next_idx = len(segments) + len(out_segments)
+    for choice_idx, (call_idx, tool, args) in proposed:
         proposed_args = args  # before redaction: what an operator approval is bound to
         arg_segments = extract_tool_arg_segments(
-            args, origin=Origin.assistant, base_idx=len(out_segments), tool_name=tool
+            args, origin=Origin.assistant, base_idx=next_idx, tool_name=tool
         )
+        next_idx += len(arg_segments)
         if arg_segments:
             # Check proposed tool call arguments for output leaks (secrets/PII)
             out_arg_ctx = ctx.model_copy(update={"stage": Stage.output, "segments": arg_segments})
@@ -244,7 +449,7 @@ async def _run(
                 args = apply_redacted_args(args, out_arg_res.segments)
                 spec = policy.raw.tools.get(tool)
                 args = keep_args(args, proposed_args, spec.no_redact_args if spec else [])
-                _update_choice_tool_call_args(choices[choice_idx], tool, args)
+                _update_choice_tool_call_args(choices[choice_idx], call_idx, args)
 
         call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool": tool, "tool_args": args})
         stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec,
@@ -288,14 +493,14 @@ def _with_canary(messages: list[dict[str, Any]], token: str) -> list[dict[str, A
     return [{"role": "system", "content": note}, *out]
 
 
-def _update_choice_tool_call_args(choice: dict[str, Any], tool: str, redacted_args: Any) -> None:
+def _update_choice_tool_call_args(choice: dict[str, Any], call_idx: int | None, redacted_args: Any) -> None:
+    """Redacted arguments into this one call (two calls of the same tool keep their own)."""
     msg = choice.get("message")
     if not isinstance(msg, dict):
         return
-    for call in msg.get("tool_calls") or []:
-        fn = call.get("function")
-        if isinstance(fn, dict) and fn.get("name") == tool:
-            fn["arguments"] = json.dumps(redacted_args, ensure_ascii=False)
+    fn = msg.get("function_call") if call_idx is None else (msg.get("tool_calls") or [])[call_idx].get("function")
+    if isinstance(fn, dict):
+        fn["arguments"] = json.dumps(redacted_args, ensure_ascii=False)
 
 
 _account = account_usage

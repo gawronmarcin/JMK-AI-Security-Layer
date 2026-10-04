@@ -106,7 +106,9 @@ async def test_mock_scenario_header_is_forwarded(gw):
 
 async def test_session_header_is_used(gw):
     r = await gw.chat("hi", headers={"X-AICL-Session": "s-123"})
-    assert (await gw.request_event(r)).session_id == "s-123"
+    # the state key binds the client's session id to the identity (one identity cannot taint another's)
+    assert (await gw.request_event(r)).session_id == "support-agent-01:s-123"
+    assert r.headers["X-AICL-Session"] == "s-123"
 
 
 # --- real controls ---------------------------------------------------------------------------------
@@ -429,7 +431,7 @@ async def test_tool_message_taints_session_and_blocks_privileged_tool(gw):
         },
     )
     assert r.status_code == 200
-    assert (await gw.app.state.runtime.state.get_session("s-taint")).tainted
+    assert (await gw.app.state.runtime.state.get_session("support-agent-01:s-taint")).tainted
 
     email = 'call_tool:send_email:{"to": "x@example.org", "subject": "s", "body": "b"}'
     r = await gw.chat("send it", scenario=email, headers=session)

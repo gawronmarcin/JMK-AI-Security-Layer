@@ -122,7 +122,7 @@ async def test_approval_flow_across_two_gateway_instances(tmp_path, monkeypatch)
     (tmp_path / "b").mkdir()
     async with _two_gateways(tmp_path, monkeypatch) as (((app_a, a), (app_b, b)), _):
         assert isinstance(app_a.state.runtime.state, RedisStore)
-        await app_a.state.runtime.state.mark_tainted("s-shared", "untrusted_input")  # taint seen by both
+        await app_a.state.runtime.state.mark_tainted("support-agent-01:s-shared", "untrusted_input")  # taint seen by both
         r = await b.post("/v1/tools/invoke", json=EMAIL, headers=_auth("support"))
         assert r.status_code == 403
         approval_id = r.json()["error"]["approval_id"]

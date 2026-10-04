@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from aicl.controls.delegation import DELEGATION_TOOLS
 from aicl.engine import run_stage
 from aicl.errors import GatewayError
 from aicl.flows.common import (
@@ -29,10 +30,13 @@ from aicl.flows.common import (
     apply_redacted_args,
     auth_decision,
     extract_tool_arg_segments,
+    fail_closed_redaction,
+    issue_delegation_ticket,
     keep_args,
     stop_if_blocked,
+    string_leaves,
 )
-from aicl.models import Action, ErrorType, Origin, RequestContext, Stage, Trust, Usage
+from aicl.models import Action, ErrorType, Origin, RequestContext, Segment, Stage, Trust, Usage
 from aicl.normalize import build_segment
 from aicl.proxy import UpstreamError
 from aicl.runtime import Runtime
@@ -45,6 +49,31 @@ class ToolInvokeRequest(BaseModel):
     arguments: dict[str, Any] | Any = Field(default_factory=dict)
     session_id: str | None = None
     caller_agent: str | None = None
+
+
+MAX_RESULT_SEGMENTS = 200  # strings of one tool result inspected (and redactable) one by one
+
+
+def _result_segments(body: dict[str, Any], tool: str, trust: Trust) -> list[Segment]:
+    """One segment per string in the tool result (meta `arg_path` locates it for redaction).
+
+    Shortest first, so the longest texts get the highest idx: the semantic judge looks at the
+    last segments first and caps how many it judges. Past MAX_RESULT_SEGMENTS the shortest
+    strings are joined into one `overflow` segment: inspected, but a redaction there blocks.
+    """
+    leaves = sorted(string_leaves(body), key=lambda leaf: len(leaf[1]))
+    overflow: list[tuple[list[Any], str]] = []
+    if len(leaves) > MAX_RESULT_SEGMENTS:
+        cut = len(leaves) - (MAX_RESULT_SEGMENTS - 1)
+        overflow, leaves = leaves[:cut], leaves[cut:]
+    segments = []
+    if overflow:
+        text = "\n".join(t for _, t in overflow)
+        segments.append(build_segment(0, text, Origin.tool_result, trust, {"tool": tool, "overflow": True}))
+    for path, text in leaves:
+        meta = {"tool": tool, "arg_path": path}
+        segments.append(build_segment(len(segments), text, Origin.tool_result, trust, meta))
+    return segments
 
 
 def _parse(raw: bytes) -> tuple[ToolInvokeRequest, dict[str, Any]]:
@@ -79,7 +108,8 @@ async def _run(
     identity = rec.authenticate()
     req, _ = _parse(await rec.read_body(read_body))
     if req.session_id:
-        rec.session_id = req.session_id
+        rec.use_session(req.session_id)
+    await rec.join_delegation()
     if req.caller_agent is not None and req.caller_agent != identity.id:
         raise GatewayError(
             ErrorType.auth_failed,
@@ -153,19 +183,12 @@ async def _run(
         compute_seconds=round(upstream.latency_ms / 1000, 3),
     )
 
-    # 4. Tool result stage (C-PII-OUT, C-SECRET-OUT, C-INJ-PAT, C-INJ-SEM)
-    content = body.get("output")
-    if content is None:
-        content = body.get("result")
-    if isinstance(content, str):
-        text = content
-    else:
-        text = json.dumps(body, ensure_ascii=False)
-
+    # 4. Tool result stage (C-PII-OUT, C-SECRET-OUT, C-INJ-PAT, C-INJ-SEM): every string in the
+    # backend's JSON is inspected, not only `output`/`result`; everything goes back to the client
     trust: Trust = tool_spec.output_trust
-    result_seg = build_segment(0, text, Origin.tool_result, trust, {"tool": req.tool})
+    result_segments = _result_segments(body, req.tool, trust)
 
-    res_ctx = ctx.model_copy(update={"stage": Stage.tool_result, "segments": [result_seg]})
+    res_ctx = ctx.model_copy(update={"stage": Stage.tool_result, "segments": result_segments})
     result = rec.add_stage(await run_stage(policy, res_ctx, Stage.tool_result, rt.controls))
     stop_if_blocked(result, rec)
 
@@ -173,23 +196,21 @@ async def _run(
     if trust == "untrusted" or result.taints_session:
         await rt.state.mark_tainted(rec.session_id, f"tool:{req.tool}")
 
-    # Redact if necessary
     if result.action == Action.redact:
-        new_text = result.segments[0].text
-        if isinstance(body.get("output"), str):
-            body["output"] = new_text
-        elif isinstance(body.get("result"), str):
-            body["result"] = new_text
-        elif isinstance(body.get("content"), str):
-            body["content"] = new_text
-        else:
-            try:
-                body = json.loads(new_text)
-            except (ValueError, TypeError):
-                body["output"] = new_text
+        changed = [s for s in result.segments if s.text != result_segments[s.idx].text]
+        if any(s.meta.get("overflow") for s in changed):
+            fail_closed_redaction(result, "a tool result with too many fields")
+        body = apply_redacted_args(body, changed)
+
+    headers_out: dict[str, str] = {}
+    if req.tool in DELEGATION_TOOLS:
+        # the sub-agent joins the delegation with this ticket: depth and taint follow it (C-DELEG)
+        ticket = await issue_delegation_ticket(rt, rec, args)
+        body["delegation_ticket"] = ticket
+        headers_out["X-AICL-Delegation-Ticket"] = ticket
 
     final = rec.final_action()
     rec.emit(final)
     if "tool" not in body:
         body["tool"] = req.tool
-    return FlowResponse(status=200, body=body, headers=rec.response_headers(final))
+    return FlowResponse(status=200, body=body, headers=rec.response_headers(final) | headers_out)

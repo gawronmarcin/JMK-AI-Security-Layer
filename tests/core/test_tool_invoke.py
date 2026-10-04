@@ -194,7 +194,7 @@ async def test_untrusted_tool_taints_session_and_blocks_privileged_tool(gw):
     r1 = await gw.invoke("search_docs", {"query": "untrusted document"}, session_id=session_id)
     assert r1.status_code == 200
     # Session is now marked tainted
-    assert (await gw.app.state.runtime.state.get_session(session_id)).tainted is True
+    assert (await gw.app.state.runtime.state.get_session(f"support-agent-01:{session_id}")).tainted is True
 
     # Step 2: invoke send_email (privilege: high) in the tainted session -> blocked by C-TAINT
     r2 = await gw.invoke(

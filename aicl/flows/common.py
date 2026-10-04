@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aicl.audit import new_event
+from aicl.controls.delegation import delegated_depth
 from aicl.engine import StageResult
 from aicl.errors import GatewayError
 from aicl.models import (
@@ -37,6 +38,7 @@ AUTH_THREATS = ["TH-08"]
 SIZE_CONTROL_ID = "C-SIZE"
 # Blocks by these controls are answered as 429 aicl_budget_exceeded (§5.3).
 _BUDGET_CONTROLS = frozenset({"C-BUDGET"})
+DELEGATION_TICKET_HEADER = "x-aicl-delegation-ticket"
 
 
 class BodyTooLarge(Exception):
@@ -73,19 +75,16 @@ def authenticate(
     headers: Mapping[str, str],
     env: Mapping[str, str] | None = None,
 ) -> IdentitySpec:
-    """C-AUTH: Bearer key -> identity; a claimed X-AICL-Agent must match that identity."""
+    """C-AUTH: Bearer key -> identity; a claimed X-AICL-Agent must match that identity.
+
+    `AICL_ADMIN_OPEN=1` opens the /admin endpoints only (aicl/admin/*); the gateway API always
+    needs a key, otherwise an anonymous caller would act as `admin` (every tool, no budget).
+    `env` is kept for callers that pass it.
+    """
     auth = headers.get("authorization", "")
     scheme, _, key = auth.partition(" ")
     identity = policy.identity_for_key(key.strip()) if scheme.lower() == "bearer" and key.strip() else None
     claimed = headers.get("x-aicl-agent")
-
-    if identity is None and env and env.get("AICL_ADMIN_OPEN") == "1":
-        if claimed and claimed in policy.identities:
-            return policy.identities[claimed]
-        if "admin" in policy.identities:
-            return policy.identities["admin"]
-        if policy.identities:
-            return next(iter(policy.identities.values()))
 
     if identity is None:
         raise GatewayError(
@@ -125,7 +124,10 @@ class RequestRecord:
     policy: CompiledPolicy = field(init=False)
     feed_version: str | None = field(init=False)
     request_id: str = field(default_factory=lambda: new_id("req"))
+    # session_id is the state key "<identity>:<client session id>" once authenticated, so one
+    # identity can neither taint nor read another identity's session (C-TAINT, C-LOOP, C-DELEG)
     session_id: str = field(init=False)
+    client_session_id: str = field(init=False)
     identity: IdentitySpec | None = None
     profile: Profile | None = None
     model: str | None = None
@@ -145,12 +147,20 @@ class RequestRecord:
         # One snapshot of policy and feed per request, even if they are reloaded meanwhile.
         self.policy = self.rt.policy
         self.feed_version = self.rt.feeds.current().version
-        self.session_id = self.headers.get("x-aicl-session") or new_id("sess")
+        self.client_session_id = self.headers.get("x-aicl-session") or new_id("sess")
+        self.session_id = self.client_session_id  # until authenticated (audit of auth failures)
 
     def authenticate(self) -> IdentitySpec:
         self.identity = authenticate(self.policy, self.headers, getattr(self.rt, "env", None))
         self.profile = self.policy.profile_for(self.identity)
+        self.use_session(self.client_session_id)
         return self.identity
+
+    def use_session(self, client_session_id: str) -> None:
+        """Bind the client's session id to the authenticated identity."""
+        assert self.identity is not None, "authenticate() first"
+        self.client_session_id = client_session_id
+        self.session_id = f"{self.identity.id}:{client_session_id}"
 
     async def read_body(self, reader: BodyReader, limit_key: str = "max_body_bytes", slack: int = 0) -> bytes:
         """Read the body, enforcing a C-SIZE limit before anything parses it (TH-20).
@@ -180,6 +190,47 @@ class RequestRecord:
             shadow = cfg.mode == "shadow" and cfg.action != Action.allow
             self.extra_decisions.append(_size_decision(cfg.threat_ids, cfg.action, len(body), limit, shadow))
         return body
+
+    async def join_delegation(self) -> None:
+        """A sub-agent's request with `X-AICL-Delegation-Ticket` (issued when a delegation went
+        through, see `issue_delegation_ticket`) puts its session at the delegated depth and
+        carries the parent session's taint over (C-DELEG, C-TAINT). A ticket only ever adds
+        restrictions, so an unknown or reused one gains nothing."""
+        ticket = self.headers.get(DELEGATION_TICKET_HEADER)
+        if not ticket:
+            return
+        parent = await self.rt.state.get_session(f"dlg:{ticket}")
+        own = await self.rt.state.get_session(self.session_id)
+        if parent.delegation_depth > own.delegation_depth:
+            await self.rt.state.set_delegation_depth(self.session_id, parent.delegation_depth)
+        if parent.tainted:
+            await self.rt.state.mark_tainted(self.session_id, "delegation")
+        self.notes["delegation_ticket"] = ticket
+
+    def check_message_sizes(self, n_messages: int, lengths: list[int]) -> None:
+        """C-SIZE `max_messages` / `max_chars_per_message` before the segments are built: the
+        normalization of a huge message is itself the cost to avoid (TH-20).
+
+        Only a block fails fast here (redact counts as block, as in the engine). Flag, shadow and
+        require_approval are left to the C-SIZE control at ingress, so nothing is recorded twice.
+        """
+        assert self.profile is not None
+        cfg = self.policy.level_config(SIZE_CONTROL_ID, self.profile)
+        if cfg is None or cfg.mode != "enforce" or cfg.action not in (Action.block, Action.redact):
+            return
+        max_messages, max_chars = cfg.get("max_messages"), cfg.get("max_chars_per_message")
+        if max_messages is not None and n_messages > int(max_messages):
+            reason = f"message count {n_messages} exceeds limit of {max_messages}"
+            match = Match(kind="message_count_limit", masked=f"{n_messages} messages")
+        else:
+            over = next(((i, n) for i, n in enumerate(lengths) if n > int(max_chars)), None) if max_chars else None
+            if over is None:
+                return
+            reason = f"message[{over[0]}] length {over[1]} chars exceeds limit of {max_chars}"
+            match = Match(kind="message_length_limit", segment_idx=over[0], masked=f"{over[1]} chars")
+        decision = Decision(control_id=SIZE_CONTROL_ID, threat_ids=list(cfg.threat_ids), action=Action.block,
+                            severity="medium", reason=reason, matches=[match])
+        raise GatewayError(ErrorType.blocked, f"blocked by {SIZE_CONTROL_ID}: {reason}", decision)
 
     def add_stage(self, result: StageResult) -> StageResult:
         self.stages.append(result)
@@ -216,6 +267,7 @@ class RequestRecord:
             "X-AICL-Request-Id": self.request_id,
             "X-AICL-Policy-Version": self.policy.version,
             "X-AICL-Overhead-Ms": f"{self.overhead_ms():.2f}",
+            "X-AICL-Session": self.client_session_id,
         }
         if action is not None:
             headers["X-AICL-Action"] = action.value
@@ -400,6 +452,34 @@ def stop_if_blocked(
     raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {d.reason}", d)
 
 
+async def issue_delegation_ticket(rt: Runtime, rec: RequestRecord, args: Mapping[str, Any]) -> str:
+    """After a delegation tool call went through: a ticket for the sub-agent, holding the depth of
+    the delegated task and the caller session's taint. The sub-agent sends it back as
+    `X-AICL-Delegation-Ticket` (RequestRecord.join_delegation)."""
+    session = await rt.state.get_session(rec.session_id)
+    ticket = new_id("dlg")
+    key = f"dlg:{ticket}"
+    await rt.state.set_delegation_depth(key, delegated_depth(session.delegation_depth, args))
+    if session.tainted:
+        await rt.state.mark_tainted(key, "delegation")
+    rec.notes["delegation_ticket_issued"] = ticket
+    return ticket
+
+
+def fail_closed_redaction(result: StageResult, where: str) -> None:
+    """A redaction the flow cannot write back into the request/response (e.g. text decoded from
+    a data: URL) is turned into a block, as the engine does for spans found only in decoded text."""
+    d = next(
+        (d for d in result.decisions if d.action == Action.redact and not d.shadow_suppressed and not d.skipped),
+        None,
+    )
+    if d is None:
+        return
+    reason = f"{d.reason} (in {where}, which cannot be redacted in place: failing closed)"
+    decision = d.model_copy(update={"action": Action.block, "reason": reason})
+    raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {reason}", decision)
+
+
 async def account_usage(rt: Runtime, rec: RequestRecord) -> None:
     """Post stage: usage counters per identity and budget window (§5.5)."""
     if rec.identity is None:
@@ -421,6 +501,25 @@ async def account_usage(rt: Runtime, rec: RequestRecord) -> None:
         await rt.state.add_usage(rec.identity.id, "minute", requests=1)
 
 
+def string_leaves(value: Any) -> list[tuple[list[Any], str]]:
+    """(path, text) of every non-blank string inside nested dicts and lists, in document order."""
+    leaves: list[tuple[list[Any], str]] = []
+
+    def _walk(val: Any, path: list[Any]) -> None:
+        if isinstance(val, str):
+            if val.strip():
+                leaves.append((path, val))
+        elif isinstance(val, dict):
+            for k, v in val.items():
+                _walk(v, path + [k])
+        elif isinstance(val, (list, tuple)):
+            for i, v in enumerate(val):
+                _walk(v, path + [i])
+
+    _walk(value, [])
+    return leaves
+
+
 def extract_tool_arg_segments(
     tool_args: Any,
     origin: Origin,
@@ -429,22 +528,8 @@ def extract_tool_arg_segments(
     tool_name: str | None = None,
 ) -> list[Segment]:
     """Turn string values inside tool arguments into Segments for inspection."""
-    extracted: list[tuple[list[Any], str]] = []
-
-    def _walk(val: Any, path: list[Any]) -> None:
-        if isinstance(val, str):
-            if val.strip():
-                extracted.append((path, val))
-        elif isinstance(val, dict):
-            for k, v in val.items():
-                _walk(v, path + [k])
-        elif isinstance(val, (list, tuple)):
-            for i, v in enumerate(val):
-                _walk(v, path + [i])
-
-    _walk(tool_args, [])
     segments: list[Segment] = []
-    for i, (path, text) in enumerate(extracted):
+    for i, (path, text) in enumerate(string_leaves(tool_args)):
         meta: dict[str, Any] = {"arg_path": path}
         if tool_name:
             meta["tool"] = tool_name
