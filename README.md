@@ -216,7 +216,13 @@ Measured on a laptop CPU (no GPU). Reports are written to `reports/`.
 | Held-out injection set, all tiers on (balanced profile, judge `qwen2.5:3b`) | 46/47 attacks detected, 0/29 false positives, 17 languages | `reports/stack_test.md` |
 | Live self-test, reference policy | 20/20 probes pass | `make selftest` |
 
-When the LLM judge is consulted (untrusted content or grey-zone requests), it adds several seconds per request on CPU.
+> [!IMPORTANT]
+> **NOTE REGARDING SEMANTIC JUDGE MODEL AND RUNTIME ENVIRONMENT:**
+> Due to hackathon evaluation time constraints and model weight download sizes (~several GBs), the full local LLM used as semantic judge (`qwen2.5` / `llama3.2`) **cannot download in time during standard live evaluation startup**.
+> Therefore, in the default Docker container (`docker compose up`), the semantic tier uses the built-in fast mock/heuristic engine, while full model pulling and execution with real Ollama is isolated in the `hybrid` profile (`docker compose --profile hybrid up`).
+> **The targeted, full live operation with real weights and Ollama is demonstrated in detail in the submitted video presentation!**
+> 
+> *All tests and runs are executed strictly via the Docker environment.*
 
 ## Running
 
@@ -231,20 +237,9 @@ AICL_STATE_URL_OVERRIDE=redis://redis:6379/0 docker compose --profile redis up  
 ```
 
 The gateway container runs as a non-root user; ports are bound to 127.0.0.1. The audit log is kept in a named volume; export it with `GET /admin/export/audit.jsonl`.
-
-### Local
-
-```bash
-python -m venv .venv
-.venv/bin/pip install -e ".[test,dev]"          # Windows: .venv\Scripts\pip
-cp .env.example .env
-make mocks                                      # mock LLM, tools and MCP server
-make dev                                        # gateway on :8080 with auto-reload
-```
-
-Optional extras: `.[protectai]` for the classifier, `.[redis]` for shared state. Setting up Ollama and the AI tiers is described in [docs/SEMANTIC_SETUP.md](docs/SEMANTIC_SETUP.md); the step-by-step guide is [manual.md](manual.md).
-
 The dashboard is at `http://localhost:8080/dashboard/`. The development admin key is `dev-key-admin` (a warning is logged and audited while `dev-key-*` keys are in use).
+
+The step-by-step guide is [manual.md](manual.md).
 
 ## Dashboard and reporting
 
