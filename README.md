@@ -1,5 +1,10 @@
 # JMK AI Security Layer (AICL)
 
+> [!TIP]
+> ### 📊 **Live Dashboard**: [http://localhost:8080/dashboard/](http://localhost:8080/dashboard/)
+> **Default Admin API Key**: `dev-key-admin`  
+> *(Provides real-time telemetry, interactive Playground, policy inspect/reload, and live audit stream)*
+
 AICL is a security gateway that sits between AI agents or applications and the things they call: language models, tools and MCP servers. Every request and every response passes through a pipeline of controls defined in one YAML policy. The gateway can allow, redact, flag, block or hold a request for operator approval, enforces token, cost and compute budgets, and writes an audit log that feeds a built-in dashboard.
 
 Built for the HackYeah 2026 challenge "AI Control Layer".

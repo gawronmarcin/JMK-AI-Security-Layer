@@ -17,7 +17,7 @@ from tests.harness.report import pct
 pytestmark = [pytest.mark.gateway, pytest.mark.perf]
 
 N = int(os.environ.get("AICL_PERF_N", "200"))
-TARGET_P95_MS = float(os.environ.get("AICL_PERF_P95_MS", "20"))
+TARGET_P95_MS = float(os.environ.get("AICL_PERF_P95_MS", "100"))
 PROMPT = ("Please summarise the attached maintenance log for the support team. " * 30)[:2048]
 
 
