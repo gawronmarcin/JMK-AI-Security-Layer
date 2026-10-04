@@ -31,6 +31,7 @@ from aicl import feeds, registry
 from aicl.admin import approvals as admin_approvals
 from aicl.admin import policy as admin_policy
 from aicl.admin import telemetry as admin_telemetry
+from aicl.approvals import DEFAULT_TTL_SECONDS, ApprovalStore
 from aicl.audit import AuditWriter
 from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
@@ -103,6 +104,7 @@ def create_app(
         policy_path=policy_path,
         reload_interval=reload_interval,
         policy_listeners=[semantic_judge_listener(env), embedding_listener(env, base), classifier_listener(env)],
+        approvals=ApprovalStore(ttl_seconds=int(env.get("AICL_APPROVAL_TTL_SECONDS", DEFAULT_TTL_SECONDS))),
     )
     set_store(rt.state)
 

@@ -127,7 +127,8 @@ async def test_pii_in_model_output_is_redacted(gw):
 async def test_pii_in_user_input_is_redacted_before_upstream(gw):
     r = await gw.chat("My email is jan.kowalski@example.com, help me")
     assert r.status_code == 200
-    forwarded = gw.calls[0]["body"]["messages"][0]["content"]
+    # messages[0] is the system prompt with the canary (C-CANARY inject_into_system_prompt)
+    forwarded = next(m["content"] for m in gw.calls[0]["body"]["messages"] if m["role"] == "user")
     assert "jan.kowalski@example.com" not in forwarded and "[REDACTED:email]" in forwarded
 
 
@@ -245,7 +246,7 @@ async def test_content_parts_and_tool_messages_are_scanned(gw):
                              json={"model": "mock-commercial", "messages": messages})  # fmt: skip
     assert r.status_code == 200
     forwarded = gw.calls[0]["body"]["messages"]
-    assert forwarded[0]["content"] == "You are helpful."
+    assert forwarded[0]["content"].startswith("You are helpful.")  # + the canary instruction
     assert "[REDACTED:email]" in forwarded[2]["content"]
 
 

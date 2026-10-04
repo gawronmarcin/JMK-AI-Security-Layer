@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ from aicl.models import (
 from aicl.normalize import build_segment
 from aicl.policy.schema import CompiledPolicy, IdentitySpec
 from aicl.runtime import Runtime
-from aicl.utils import new_id
+from aicl.utils import new_id, stable_hash
 
 AUTH_CONTROL_ID = "C-AUTH"
 AUTH_THREATS = ["TH-08"]
@@ -134,6 +135,10 @@ class RequestRecord:
     upstream_ms: float = 0.0
     usage: Usage | None = None
     errors: list[str] = field(default_factory=list)
+    # HITL: stages whose require_approval was satisfied by an operator approval, and its details
+    approved_stages: set[int] = field(default_factory=set)
+    approval: dict[str, Any] | None = None
+    notes: dict[str, Any] = field(default_factory=dict)  # extra facts for the audit event `detail`
     _t0: float = field(default_factory=time.perf_counter)
 
     def __post_init__(self) -> None:
@@ -186,7 +191,15 @@ class RequestRecord:
 
     def final_action(self) -> Action:
         extra = [d.action for d in self.extra_decisions if not d.shadow_suppressed and not d.skipped]
-        return strongest_action([s.action for s in self.stages] + extra)
+        return strongest_action([self._stage_action(s) for s in self.stages] + extra)
+
+    def _stage_action(self, stage: StageResult) -> Action:
+        """A stage's action; an operator-approved stage counts without its require_approval."""
+        if id(stage) not in self.approved_stages:
+            return stage.action
+        return strongest_action([d.action for d in stage.decisions
+                                 if d.action != Action.require_approval and not d.skipped
+                                 and not d.shadow_suppressed])
 
     def would_have_action(self) -> Action | None:
         final = self.final_action()
@@ -237,6 +250,7 @@ class RequestRecord:
                 ),
                 usage=self.usage,
                 error="; ".join(errors) or None,
+                detail=({**self.notes, **({"approval": self.approval} if self.approval else {})} or None),
             )
         )
 
@@ -281,37 +295,106 @@ def _size_decision(threat_ids: list[str], action: Action, size: int, limit: int,
     )
 
 
-def stop_if_blocked(result: StageResult, rec: RequestRecord | None = None) -> None:
-    """Raise when a stage ended in block / require_approval."""
+def approval_subject(result: StageResult, subject: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """What an approval authorizes: the stage plus the action (`subject`, e.g. tool + arguments as
+    the client sent them, NOT after redaction: two recipients redacted to the same placeholder
+    must not share one approval), or the stage's texts when the caller has no better description."""
+    if subject is not None:
+        return {"stage": result.stage.value, **subject}
+    return {"stage": result.stage.value, "texts": [seg.text for seg in result.segments]}
+
+
+def _preview(value: Any, limit: int = 120) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def _approval_summary(subject: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Operator view of the action: one line + a preview with truncated values. It shows the real
+    arguments (the operator must see who an e-mail goes to); it is served by the admin API only
+    and kept in memory - the audit log gets the fingerprint, not this."""
+    if "tool" in subject:
+        args = subject.get("args")
+        shown = args if isinstance(args, Mapping) else {"_value": args}
+        preview = {str(k): _preview(v) for k, v in shown.items()}
+        inner = ", ".join(f"{k}={_preview(v, 40)}" for k, v in preview.items())
+        return f"{subject['tool']}({inner})", {"stage": subject.get("stage"), "tool": subject["tool"], "args": preview}
+    texts = [_preview(t) for t in subject.get("texts", [])]
+    first = texts[0] if texts else ""
+    more = f" (+{len(texts) - 1} more)" if len(texts) > 1 else ""
+    return f"{subject.get('stage')}: {first}{more}", {"stage": subject.get("stage"), "texts": texts}
+
+
+def _emit_approval_event(rec: RequestRecord, kind: str, detail: dict[str, Any]) -> None:
+    rec.rt.audit.emit(
+        new_event(
+            kind,  # type: ignore[arg-type]  # one of the approval.* EventType values
+            request_id=rec.request_id,
+            session_id=rec.session_id,
+            endpoint=rec.endpoint,
+            identity=rec.identity.id if rec.identity else None,
+            role=rec.identity.role if rec.identity else None,
+            policy_version=rec.policy.version,
+            detail=detail,
+        )
+    )
+
+
+def stop_if_blocked(
+    result: StageResult, rec: RequestRecord | None = None, subject: Mapping[str, Any] | None = None
+) -> None:
+    """Raise when a stage ended in block / require_approval.
+
+    require_approval: an `X-AICL-Approval-Id` approved by an operator lets the request through
+    only if it was granted to this identity for this exact action (fingerprint of endpoint,
+    control and `approval_subject`), has not expired and was not used before (aicl/approvals.py).
+    Otherwise the pending approval for this action is (re)used and its id returned.
+    """
     if not result.stopped:
         return
     assert result.blocking is not None
     d = result.blocking
     if result.action == Action.require_approval:
         approval_id = None
+        message = f"approval required by {d.control_id}: {d.reason}"
         if rec is not None:
-            # Check if an approval ID was supplied by the client and already approved by operator
-            claimed_id = rec.headers.get("x-aicl-approval-id") or rec.headers.get("x-aicl-approval")
-            if claimed_id and rec.rt.approvals.is_approved(claimed_id):
-                # Operator previously approved this action: permit execution
-                return
-            # Register a new pending approval
-            appr = rec.rt.approvals.create(
-                request_id=rec.request_id,
-                session_id=rec.session_id,
-                control_id=d.control_id,
-                threat_ids=d.threat_ids,
-                reason=d.reason,
-                identity=rec.identity.id if rec.identity else None,
-                action_type=rec.endpoint,
-            )
+            identity = rec.identity.id if rec.identity else None
+            subj = approval_subject(result, subject)
+            fingerprint = stable_hash({"endpoint": rec.endpoint, "control_id": d.control_id, "subject": subj})
+            claimed = rec.headers.get("x-aicl-approval-id") or rec.headers.get("x-aicl-approval")
+            if claimed:
+                ok, why = rec.rt.approvals.consume(
+                    claimed, identity=identity, fingerprint=fingerprint, request_id=rec.request_id
+                )
+                event = {"approval_id": claimed, "control_id": d.control_id, "fingerprint": fingerprint,
+                         "result": "used" if ok else "refused", "reason": why}
+                _emit_approval_event(rec, "approval.used" if ok else "approval.refused", event)
+                if ok:
+                    item = rec.rt.approvals.get(claimed)
+                    rec.approved_stages.add(id(result))
+                    rec.approval = {"approval_id": claimed, "control_id": d.control_id,
+                                    "decided_by": item.decided_by if item else None}
+                    return
+                message += f" (approval {claimed} not accepted: {why})"
+            appr = rec.rt.approvals.find_pending(identity, fingerprint)
+            if appr is None:
+                summary, preview = _approval_summary(subj)
+                appr = rec.rt.approvals.create(
+                    request_id=rec.request_id,
+                    session_id=rec.session_id,
+                    control_id=d.control_id,
+                    threat_ids=d.threat_ids,
+                    reason=d.reason,
+                    identity=identity,
+                    action_type=rec.endpoint,
+                    payload=preview,
+                    fingerprint=fingerprint,
+                    summary=summary,
+                )
+                _emit_approval_event(rec, "approval.requested", {
+                    "approval_id": appr.approval_id, "control_id": d.control_id, "fingerprint": fingerprint})
             approval_id = appr.approval_id
-        raise GatewayError(
-            ErrorType.approval_required,
-            f"approval required by {d.control_id}: {d.reason}",
-            d,
-            approval_id=approval_id,
-        )
+        raise GatewayError(ErrorType.approval_required, message, d, approval_id=approval_id)
     if d.control_id in _BUDGET_CONTROLS:  # §5.3: budget exceeded is 429, not 403
         raise GatewayError(ErrorType.budget_exceeded, f"budget exceeded ({d.control_id}): {d.reason}", d)
     raise GatewayError(ErrorType.blocked, f"blocked by {d.control_id}: {d.reason}", d)

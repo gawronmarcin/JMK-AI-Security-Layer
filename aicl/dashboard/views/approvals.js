@@ -58,8 +58,12 @@ export function createApprovals(ctx) {
       },
       {
         key: 'reason',
-        label: 'Reason',
-        render: (row) => el('span', { class: 'small', text: row.reason }),
+        label: 'Action / reason',
+        // summary = the exact action this approval authorizes (single use, this caller only)
+        render: (row) => el('div', {},
+          row.summary ? el('div', { class: 'mono small', text: row.summary }) : null,
+          el('div', { class: 'muted small', text: row.reason }),
+          row.used_at ? el('div', { class: 'muted small', text: `used ${row.used_at}` }) : null),
       },
       {
         key: 'status',

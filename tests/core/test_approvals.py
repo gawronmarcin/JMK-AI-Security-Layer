@@ -207,3 +207,129 @@ async def test_gateway_hitl_approval_flow(tmp_path):
         r_ok = await client.post("/v1/tools/invoke", json=invoke_payload, headers=retry_headers)
         assert r_ok.status_code == 200
         assert "Email successfully sent" in r_ok.json().get("output", "")
+
+
+# --------------------------------------------------------------------------- binding (no replay)
+
+from contextlib import asynccontextmanager  # noqa: E402
+
+TAINT_APPROVAL = {"taint": {"enabled": True, "blocked_privileges_when_tainted": ["high", "critical"],
+                            "action": "require_approval", "session_ttl_seconds": 3600}}
+EMAIL = {"tool": "send_email", "arguments": {"to": "ops@example.com", "subject": "Update", "body": "All good"}}
+
+
+@asynccontextmanager
+async def _gateway(tmp_path):
+    app = create_app(
+        write_policy(tmp_path, TAINT_APPROVAL),
+        env=ENV,
+        upstream_transport=httpx.ASGITransport(make_fake_upstream()[0]),
+        tool_transport=httpx.ASGITransport(make_mock_tools()[0]),
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        yield app, client
+
+
+def _auth(who: str, approval_id: str | None = None) -> dict[str, str]:
+    h = {"Authorization": f"Bearer {KEYS[who]}"}
+    if approval_id:
+        h["X-AICL-Approval-Id"] = approval_id
+    return h
+
+
+async def _ask_and_approve(app, client, session: str, body: dict = EMAIL) -> str:
+    await app.state.runtime.state.mark_tainted(session, "untrusted_input")
+    r = await client.post("/v1/tools/invoke", json={**body, "session_id": session}, headers=_auth("support"))
+    assert r.status_code == 403 and r.json()["error"]["type"] == "aicl_approval_required"
+    approval_id = r.json()["error"]["approval_id"]
+    r = await client.post(f"/admin/approvals/{approval_id}/approve", headers=_auth("admin"))
+    assert r.status_code == 200
+    return approval_id
+
+
+async def test_approval_is_single_use(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        approval_id = await _ask_and_approve(app, client, "s1")
+        body = {**EMAIL, "session_id": "s1"}
+        ok = await client.post("/v1/tools/invoke", json=body, headers=_auth("support", approval_id))
+        assert ok.status_code == 200
+        assert ok.headers.get("X-AICL-Action") != "require_approval"  # executed with approval
+        again = await client.post("/v1/tools/invoke", json=body, headers=_auth("support", approval_id))
+        assert again.status_code == 403
+        assert "already used" in again.json()["error"]["message"]
+
+
+async def test_approval_does_not_cover_other_arguments(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        approval_id = await _ask_and_approve(app, client, "s2")
+        other = {"tool": "send_email",
+                 "arguments": {"to": "attacker@evil.example", "subject": "Update", "body": "All good"},
+                 "session_id": "s2"}
+        r = await client.post("/v1/tools/invoke", json=other, headers=_auth("support", approval_id))
+        assert r.status_code == 403
+        assert "different action" in r.json()["error"]["message"]
+        # the approval is still unused: the approved action itself goes through
+        ok = await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s2"},
+                               headers=_auth("support", approval_id))
+        assert ok.status_code == 200
+
+
+async def test_approval_does_not_cover_other_identity(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        approval_id = await _ask_and_approve(app, client, "s3")
+        await app.state.runtime.state.mark_tainted("s3-admin", "untrusted_input")
+        r = await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s3-admin"},
+                              headers=_auth("admin", approval_id))
+        assert r.status_code == 403
+        assert "another identity" in r.json()["error"]["message"]
+
+
+async def test_expired_approval_is_refused(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        app.state.runtime.approvals.ttl_seconds = 0
+        approval_id = await _ask_and_approve(app, client, "s4")
+        r = await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s4"},
+                              headers=_auth("support", approval_id))
+        assert r.status_code == 403 and "expired" in r.json()["error"]["message"]
+
+
+async def test_retries_reuse_the_pending_approval_and_operator_sees_the_action(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        await app.state.runtime.state.mark_tainted("s5", "untrusted_input")
+        body = {**EMAIL, "session_id": "s5"}
+        ids = set()
+        for _ in range(3):
+            r = await client.post("/v1/tools/invoke", json=body, headers=_auth("support"))
+            ids.add(r.json()["error"]["approval_id"])
+        assert len(ids) == 1  # no queue flooding
+        item = (await client.get(f"/admin/approvals/{ids.pop()}", headers=_auth("admin"))).json()
+        assert item["summary"].startswith("send_email(") and "ops@example.com" in item["summary"]
+        assert item["payload"]["tool"] == "send_email" and item["payload"]["args"]["to"] == "ops@example.com"
+        assert len(item["fingerprint"]) == 64
+
+
+async def test_decision_is_final_and_records_the_admin(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        approval_id = await _ask_and_approve(app, client, "s6")
+        item = app.state.runtime.approvals.get(approval_id)
+        assert item.decided_by == "admin" and item.expires_at is not None  # admin identity id from the key
+        r = await client.post(f"/admin/approvals/{approval_id}/reject", headers=_auth("admin"))
+        assert r.status_code == 409
+        assert app.state.runtime.approvals.get(approval_id).status == "approved"
+
+
+async def test_approval_lifecycle_is_audited(tmp_path):
+    async with _gateway(tmp_path) as (app, client):
+        approval_id = await _ask_and_approve(app, client, "s7")
+        await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s7"}, headers=_auth("support", approval_id))
+        await client.post("/v1/tools/invoke", json={**EMAIL, "session_id": "s7"}, headers=_auth("support", approval_id))
+        types = [e.type for e in app.state.runtime.audit.recent_events()]
+        for t in ("approval.requested", "approval.decided", "approval.used", "approval.refused"):
+            assert t in types, t
+        used = next(e for e in app.state.runtime.audit.recent_events()
+                    if e.type == "request" and e.detail and e.detail.get("approval"))
+        assert used.detail["approval"]["approval_id"] == approval_id
+        assert used.final_action is not None and used.final_action.value != "require_approval"

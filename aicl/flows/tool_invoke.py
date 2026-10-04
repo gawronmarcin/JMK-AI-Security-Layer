@@ -115,6 +115,7 @@ async def _run(
     stop_if_blocked(rec.add_stage(await run_stage(policy, ctx, Stage.ingress, rt.controls)), rec)
 
     # 2. Input stage (scan arguments for C-SECRET-IN, C-PII-IN, C-INJ-PAT, C-INJ-SEM)
+    requested_args = args  # as sent by the client: what an operator approval is bound to
     arg_segments = extract_tool_arg_segments(args, origin=Origin.user, tool_name=req.tool)
     if arg_segments:
         input_ctx = ctx.model_copy(update={"stage": Stage.input, "segments": arg_segments})
@@ -125,7 +126,8 @@ async def _run(
 
     # 3. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT, C-CANARY, C-CODE-EXEC, C-MEM-ACL)
     call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool_args": args})
-    stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec)
+    stop_if_blocked(rec.add_stage(await run_stage(policy, call_ctx, Stage.tool_call, rt.controls)), rec,
+                    subject={"tool": req.tool, "args": requested_args})
 
     # Verify tool exists in policy definition
     tool_spec = policy.raw.tools.get(req.tool)

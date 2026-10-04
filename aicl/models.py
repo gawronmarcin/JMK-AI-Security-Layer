@@ -160,7 +160,11 @@ class Control(Protocol):
 
 # --- Audit event (§8) -------------------------------------------------------------------------
 
-EventType = Literal["request", "policy.reloaded", "policy.rejected", "feed.reloaded", "budget.exceeded"]
+EventType = Literal[
+    "request", "policy.reloaded", "policy.rejected", "feed.reloaded", "budget.exceeded",
+    # HITL (aicl/approvals.py): a request needs approval / an approval was used or refused
+    "approval.requested", "approval.decided", "approval.used", "approval.refused",
+]
 
 
 class AuditMatch(_Model):

@@ -32,6 +32,10 @@ def make_fake_upstream() -> tuple[FastAPI, list[dict[str, Any]]]:
         message: dict[str, Any] = {"role": "assistant", "content": None}
         if scenario.startswith("fixed:"):
             message["content"] = scenario.split(":", 1)[1]
+        elif scenario == "leak_system":  # a model that reveals its system prompt
+            system = [m.get("content") for m in body["messages"] if m.get("role") == "system"]
+            message["content"] = "My instructions were: " + " ".join(
+                c if isinstance(c, str) else " ".join(p.get("text", "") for p in c) for c in system if c)
         elif scenario.startswith("call_tool:"):
             _, name, args = scenario.split(":", 2)
             message["tool_calls"] = [
