@@ -68,14 +68,18 @@ async def test_judge_catches_paraphrase_patterns_miss(gateway):
 @pytest.mark.live
 async def test_live_cascade_classifier_and_judge(gateway, monkeypatch):
     """Kaskada na prawdziwych modelach: C-INJ-PAT -> C-INJ-BASTION -> C-INJ-SEM (docs/SEMANTIC_SETUP.md).
-    Env: AICL_TEST_CLASSIFIER_BACKEND=bastion|remote (+ AICL_BASTION_URL dla remote),
-    AICL_LIVE_OLLAMA_URL, AICL_LIVE_JUDGE_MODEL."""
+    Env: AICL_LIVE_OLLAMA_URL, AICL_LIVE_JUDGE_MODEL; klasyfikator: AICL_TEST_CLASSIFIER_BACKEND
+    (protectai | bastion | remote + AICL_BASTION_URL), domyślnie protectai, gdy jest onnxruntime
+    (pip install -e ".[protectai]")."""
     import asyncio
+    import importlib.util
 
-    backend = os.environ.get("AICL_TEST_CLASSIFIER_BACKEND", "none")
+    default_backend = "protectai" if importlib.util.find_spec("onnxruntime") else "none"
+    backend = os.environ.get("AICL_TEST_CLASSIFIER_BACKEND", default_backend)
     url, model = os.environ.get("AICL_LIVE_OLLAMA_URL"), os.environ.get("AICL_LIVE_JUDGE_MODEL")
     if backend == "none" or not (url and model):
-        pytest.skip("ustaw AICL_TEST_CLASSIFIER_BACKEND oraz AICL_LIVE_OLLAMA_URL i AICL_LIVE_JUDGE_MODEL")
+        pytest.skip('ustaw AICL_LIVE_OLLAMA_URL i AICL_LIVE_JUDGE_MODEL; klasyfikator: pip install -e ".[protectai]"')
+    monkeypatch.setenv("AICL_TEST_CLASSIFIER_BACKEND", backend)  # policy_utils wpisuje go do polityki
     monkeypatch.setenv("AICL_TEST_JUDGE_MODEL", model)
     extra = {"AICL_OLLAMA_URL": url}
     if os.environ.get("AICL_BASTION_URL"):

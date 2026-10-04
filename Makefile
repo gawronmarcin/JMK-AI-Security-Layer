@@ -23,8 +23,11 @@ install: $(BIN)/pip
 test: install                       ## pełny suite: bez Ollamy, bez internetu
 	$(PYTEST) -q
 
-test-live: install                  ## + testy z prawdziwym Ollamą
-	AICL_LIVE=1 $(PYTEST) -q --live
+OLLAMA_URL  ?= http://localhost:11434
+JUDGE_MODEL ?= qwen2.5:1.5b
+
+test-live: install                  ## + testy z prawdziwym Ollamą (make test-live JUDGE_MODEL=qwen2.5:3b)
+	AICL_LIVE=1 AICL_OLLAMA_URL=$(OLLAMA_URL) AICL_JUDGE_MODEL=$(JUDGE_MODEL) 	AICL_LIVE_OLLAMA_URL=$(OLLAMA_URL) AICL_LIVE_JUDGE_MODEL=$(JUDGE_MODEL) $(PYTEST) -q --live
 
 check-semantic: install             ## Ollama + klasyfikator: dostępność, latencja, kaskada (docs/SEMANTIC_SETUP.md)
 	$(BIN)/python scripts/check_semantic.py $(ARGS)
