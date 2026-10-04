@@ -67,9 +67,54 @@ export function createTests(ctx) {
   const fzSt = chartBox('Fuzzer bypass rate per strategy', { height: 280 });
   fzStPanel.content.appendChild(fzSt.box);
 
+  // --- Live self-test: probes through the RUNNING gateway, expectations from the CURRENT policy
+  const liveSummary = el('span', { class: 'muted small', text: 'Not run yet in this session.' });
+  const liveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: 'Run self-test' });
+  const liveTable = createTable({
+    caption: 'Live self-test results',
+    pageSize: 50,
+    rowKey: (r) => r.id,
+    rowClass: (r) => (r.verdict === 'FAIL' ? 'row-fail' : ''),
+    columns: [
+      { key: 'verdict', label: 'Verdict', sort: (r) => r.verdict, render: (r) => el('span', { class: `selftest-verdict selftest-${r.verdict.toLowerCase()}`, text: r.verdict }) },
+      { key: 'label', label: 'Probe', header: true, render: (r) => el('span', {}, el('span', { text: r.label }), el('br'), el('span', { class: 'mono muted small', text: `${r.id} · ${r.endpoint}` })) },
+      { key: 'control', label: 'Control', sort: (r) => r.control, render: (r) => (r.control === 'allow' ? el('span', { class: 'muted', text: 'positive' }) : chip(r.control, (v) => ctx.filterEvents({ control: v }))) },
+      { key: 'who', label: 'Identity / profile', render: (r) => el('span', { class: 'mono small', text: r.identity ? `${r.identity} · ${r.profile}` : 'no key' }) },
+      { key: 'exp', label: 'Expected (current policy)', render: (r) => (r.expected ? el('span', {}, el('code', { class: 'small', text: r.expected.action }), el('br'), el('span', { class: 'muted small', text: r.expected.note })) : null) },
+      { key: 'act', label: 'Actual', render: (r) => (r.action ? el('code', { class: 'small', text: `${r.action}${r.status ? ` (${r.status})` : ''}` }) : null) },
+      { key: 'note', label: 'Why', render: (r) => r.note },
+      { key: 'req', label: 'Request', render: (r) => (r.request_id ? chip(r.request_id, (v) => ctx.filterEvents({ q: v })) : null) },
+    ],
+  });
+  const livePanel = createPanel({
+    title: 'Live self-test (current policy)',
+    desc: 'Sends a fixed set of attack and benign probes through the running gateway and checks each outcome against what the policy loaded RIGHT NOW says (control action for the identity profile, shadow mode, disabled controls). Edit the policy, wait for the hot reload, run again: expectations follow. Probes count against budgets and appear in the audit log (sessions selftest-*).',
+    span: 12,
+    headerExtra: liveBtn,
+  });
+  livePanel.content.append(el('p', { class: 'selftest-summary' }, liveSummary), liveTable.root);
+  liveBtn.addEventListener('click', async () => {
+    liveBtn.disabled = true;
+    liveBtn.textContent = 'Running…';
+    liveSummary.textContent = 'Running probes through the gateway…';
+    try {
+      const res = await ctx.api.runSelftest();
+      const rep = res.data || res;
+      const s = rep.summary || {};
+      liveSummary.textContent = `PASS ${s.PASS || 0} · FAIL ${s.FAIL || 0} · SKIP ${s.SKIP || 0} — policy ${rep.policy_version} — run ${rep.run_id}`;
+      liveTable.setRows(rep.results || []);
+      ctx.refresh(['events']);
+    } catch (err) {
+      liveSummary.textContent = `Self-test unavailable: ${err.message || err}`;
+    } finally {
+      liveBtn.disabled = false;
+      liveBtn.textContent = 'Run self-test';
+    }
+  });
+
   const root = el('section', { class: 'view', 'aria-labelledby': 'v-tests' },
-    viewHeader('Tests', 'Do the controls provably work? Detection, false positives, coverage and fuzzer bypasses.'),
-    kpiGrid, grid(donutPanel, detPanel, fpPanel, heatPanel, failPanel, fzCtlPanel, fzStPanel));
+    viewHeader('Tests', 'Do the controls provably work? Live self-test on the current policy, plus the last test-suite run: detection, false positives, coverage and fuzzer bypasses.'),
+    grid(livePanel), kpiGrid, grid(donutPanel, detPanel, fpPanel, heatPanel, failPanel, fzCtlPanel, fzStPanel));
   root.querySelector('h1').id = 'v-tests';
 
   function rateChart(canvas, items, getBlock, color, label, onPick, { order = 'desc', max = 100 } = {}) {

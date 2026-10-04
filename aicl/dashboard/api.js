@@ -161,6 +161,10 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
     rejectRequest: (approvalId) =>
       request(`reject:${approvalId}`, `/admin/approvals/${approvalId}/reject`, { method: 'POST' }),
     reloadPolicy: () => request('policy.reload', '/admin/policy/reload', { method: 'POST', timeout: 20000 }),
+    /** Live self-test (aicl/selftest.py): probes with the expected outcome under the CURRENT policy. */
+    selftestProbes: () => request('selftest.probes', '/admin/selftest'),
+    runSelftest: (ids = null) =>
+      request('selftest.run', '/admin/selftest/run', { method: 'POST', query: { ids }, timeout: 180000 }),
     exportAudit: () => request('export', '/admin/export/audit.jsonl', { raw: true, accept: 'application/x-ndjson, application/jsonl, text/plain, */*', timeout: 120000 }),
     chat: ({ model, prompt, identity = null, timeout = 30000 } = {}) => {
       const customHeaders = {};

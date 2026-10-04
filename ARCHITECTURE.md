@@ -1,6 +1,6 @@
 # AI Control Layer (AICL) — Architecture & Contracts
 
-**Status:** v0.2 proposal for the HackYeah "AI Control Layer" challenge (changelog at the end).
+**Status:** v0.3, as built for the HackYeah "AI Control Layer" challenge (changelog at the end). Sections that started as proposals now describe the implementation; remaining gaps are listed in §14.
 **Purpose:** single source of truth for every team member and every AI coding assistant working on this repo. All parts are built independently and must plug into each other without integration surprises.
 
 **TL;DR:** OpenAI-compatible + MCP gateway in Python/FastAPI. One YAML policy (3 strictness profiles, hot reload). Cheap deterministic controls on every request, a local semantic judge where patterns can't decide. Budgets, signature feed, JSONL audit → dashboard. YAML-driven test suite against mock upstreams, one command to run.
@@ -44,18 +44,18 @@ Differentiators (stretch, after the core works):
         ▼
 ┌──────────────────────────── AICL gateway (FastAPI, asyncio) ────────────────────────────┐
 │ 1 ingress   : auth → model allowlist → size limits → budget pre-check                   │
-│ 2 input     : normalize → deterministic controls → (grey zone only) semantic judge      │
+│ 2 input     : normalize → deterministic controls → embeddings → classifier → LLM judge  │
 │ 3 forward   : upstream LLM  |  tool backend / MCP  |  (artifact scan has no upstream)   │
 │ 4 output    : scan response + model-proposed tool calls → redact/block → canary check   │
 │ 5 post      : accounting (tokens / cost / compute-seconds) → audit event → metrics      │
 │                                                                                         │
 │  Policy engine (YAML, validated, hot reload, versioned by hash)                         │
 │  Signature feed (YAML/JSON, hot reload, externally managed)                             │
-│  State store (in-memory; interface is Redis-ready): sessions, taint, budgets, loops     │
+│  State store (in-memory or Redis): sessions, taint, budgets, loops, HITL approvals      │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
         │ httpx                      │ httpx                       │ httpx
-   Upstream LLMs               Tool backends / MCP           Ollama (semantic judge)
-   (mock-commercial, ollama)   (mock tools in tests)
+   Upstream LLMs               Tool backends / MCP servers   Ollama (embeddings, judge)
+   (mock-commercial, ollama)   (mock tools, mock MCP)        ProtectAI classifier: in process
 
  audit.jsonl ──► metrics aggregator ──► /admin/* JSON API ──► dashboard (static HTML + JS)
 ```
@@ -65,14 +65,15 @@ Differentiators (stretch, after the core works):
 | Flow | Endpoint | Stages executed (in order) |
 |---|---|---|
 | App/agent → LLM | `POST /v1/chat/completions` | `ingress` → `input` → forward → `output` (+ `tool_call` on tool calls the model proposes) → post |
-| Agent → tool | `POST /v1/tools/invoke` | `ingress` → `tool_call` → forward → `tool_result` → post |
-| Agent → MCP server | `POST /mcp/{server}` (P1) | `ingress` → `tool_call` → forward → `tool_result` → post |
+| Agent → tool | `POST /v1/tools/invoke` | `ingress` → `input` (arguments) → `tool_call` → forward → `tool_result` → post |
+| Agent → MCP server | `POST /mcp/{server}` | `tools/call`: same stages as `/v1/tools/invoke`; `tools/list`: `ingress` + `input` on tool descriptions (§5.1) |
 | Artifact / model file check | `POST /v1/artifacts/scan` | `ingress` → `artifact` → post |
 | Admin | `/admin/*`, `/dashboard` | admin key only |
+| Live self-test | `POST /admin/selftest/run` | probes sent through the chat / tool / MCP flows above, judged against the loaded policy (§11.9) |
 
-Agent→agent delegation is handled with capability tokens (section 6.7, stretch).
+Agent→agent delegation is limited by the policy (`may_delegate_to`) and by a depth the gateway tracks through delegation tickets (§6.7).
 
-**Integration caveat:** the gateway can only *block* tool calls that are routed through it. The demo agent must execute tools via `/v1/tools/invoke` or `/mcp/{server}`. Tool calls an agent executes in-process are seen only afterwards, as messages in the next chat request (scanned at `input`, but already executed). Pick or configure the demo agent with this in mind.
+**Integration caveat:** the gateway can only *block* tool calls that are routed through it. The demo agent must execute tools via `/v1/tools/invoke` or `/mcp/{server}`. Tool calls an agent executes in-process are seen only afterwards, as messages in the next chat request (scanned at `input`, but already executed). The demo agent (`scripts/agent_demo.py`, §11.10) executes every tool through `/v1/tools/invoke`.
 
 ---
 
@@ -86,8 +87,8 @@ Agent→agent delegation is handled with capability tokens (section 6.7, stretch
 | Models/validation | Pydantic v2, `extra="forbid"` | policy typos must be rejected, not ignored |
 | Policy format | YAML (`ruamel.yaml` or `PyYAML`) | validated by Pydantic; hot reload via `watchfiles`. Enable polling mode for Docker bind mounts: file events often don't propagate from macOS/Windows hosts into containers |
 | PII/secrets | regex + checksum validators (own code); Presidio optional | check Presidio speed/licence before depending on it |
-| Semantic judge | Ollama HTTP API, small local model | model name is a policy value, not hard-coded |
-| State | `StateStore` interface; `InMemoryStore` default | horizontal scaling story = swap in `RedisStore` (stretch, do not build first) |
+| Semantic tiers | `bge-m3` embeddings via Ollama (C-INJ-EMB); ProtectAI DeBERTa-v3 via ONNX Runtime, in process (C-INJ-BASTION); Qwen 2.5 judge via Ollama (C-INJ-SEM) | model names are policy values; `policies/default.yaml` keeps the AI tiers off for offline tests, `policies/hybrid.yaml` (generated) turns them on |
+| State | `StateStore` interface; `InMemoryStore` default, `RedisStore` with `AICL_STATE_URL` | budgets, sessions and HITL approvals shared by several gateway replicas |
 | Audit | append-only `data/audit.jsonl` (single writer task via `asyncio.Queue`) | source of truth; exportable; metrics rebuilt from it on startup |
 | Dashboard | static HTML + vanilla JS; Chart.js **vendored** in repo | no CDN, must work offline; reads `/admin/*` |
 | Tests | `pytest`, `pytest-asyncio`, `httpx` in-process ASGI | YAML-driven cases; mock upstream is an in-process FastAPI app |
@@ -105,21 +106,29 @@ aicl/
   app.py                 # FastAPI app factory, routes wiring              (R1)
   engine.py              # pipeline runner, decision merging               (R1)
   models.py              # Pydantic models: context, decision, events      (R1)  ← contract
+  runtime.py             # policy/feed hot reload, watcher, shared runtime (R1)
+  flows/                 # chat, tool_invoke, mcp, artifact_scan, common   (R1)
   policy/
     schema.py            # Pydantic policy schema                          (R1)  ← contract
-    loader.py            # load, validate, hot reload, atomic swap         (R1)
-  state/                 # StateStore interface + InMemoryStore            (R1)
-  audit.py               # event writer, JSONL                             (R1)
-  proxy/                 # upstream/tool forwarding, error mapping         (R1)
+    loader.py            # load, validate                                  (R1)
+    preview.py           # policy impact preview (replay)                  (R1)
+  state/                 # StateStore: memory.py, redis_store.py           (R1)
+  approvals.py           # HITL approval store (memory / Redis)            (R1)
+  audit.py               # event writer, JSONL, rotation                   (R1)
+  feeds.py               # signature feeds: files and remote URLs          (R2)
+  proxy/                 # upstream LLM and tool clients; mcp.py (MCP client) (R1)
   controls/              # one file per control, auto-registered           (R2/R3)
-  semantic/ollama.py     # judge client + prompt                           (R3)
-  accounting/            # token counting, cost, compute time              (R3)
-  admin/                 # /admin/* routes, metrics aggregation            (R5)
+  semantic/              # embedding index, classifier, judge client       (R3)
+  selftest.py            # live self-test probes and verdicts              (R4)
+  admin/                 # /admin/* routes: policy, telemetry, approvals, selftest (R5)
   dashboard/             # static files                                    (R5)
 policies/
-  default.yaml           # sample policy (documented, 3 profiles)          (R1 schema; owners add entries)
+  default.yaml           # reference policy (documented, 3 profiles)      (R1 schema; owners add entries)
+  hybrid.yaml            # generated by scripts/make_hybrid_policy.py: AI tiers on
 feeds/
   attacks.yaml           # historical-attack signature feed                (R2)
+  injection_examples.yaml # multilingual attack/benign corpus for C-INJ-EMB (R3)
+scripts/                 # selftest.py, agent_demo.py, stack_test.py, feed_server.py, demo_traffic.py
 catalog/
   threats.yaml           # threat catalog with OWASP/ATLAS refs            (R6)
 tests/
@@ -167,7 +176,7 @@ class Segment(BaseModel):
 class RequestContext(BaseModel):
     request_id: str
     session_id: str
-    endpoint: str                  # "chat" | "tool_invoke" | "artifact_scan"
+    endpoint: str                  # "chat" | "tool_invoke" | "mcp" | "artifact_scan"
     stage: Stage
     identity: str | None           # resolved by C-AUTH
     role: str | None
@@ -240,7 +249,7 @@ class Control(Protocol):
 | `POST /v1/chat/completions` | OpenAI-compatible proxy (non-streaming). `model` selects upstream from the policy `models` list |
 | `POST /v1/tools/invoke` | Body: `{"tool": str, "arguments": object, "session_id"?: str, "caller_agent"?: str}`. Gateway forwards to the tool's backend and scans the result |
 | `POST /v1/artifacts/scan` | Multipart/bytes upload of a model file or archive; returns verdict (never deserializes) |
-| `POST /mcp/{server}` | *(P1 — verify details against the current MCP spec before building)* MCP proxy for the HTTP transport. Forwards JSON-RPC; `tools/call` goes through `tool_call`/`tool_result` stages, `tools/list` is filtered to the role's allowed tools. Existing agents integrate by changing only the MCP server URL |
+| `POST /mcp/{server}` | MCP proxy, Streamable HTTP transport, JSON-RPC 2.0, protocol 2025-06-18 (2025-03-26 accepted). The gateway is the MCP server for the agent and an MCP client of `mcp_servers.<server>`. `initialize` is answered by the gateway (issues `Mcp-Session-Id` = AICL session); `tools/list` shows only tools declared as `<server>.<tool>` and permitted for the role, descriptions scanned, flagged tools hidden; `tools/call` runs the `/v1/tools/invoke` pipeline, a policy stop is a tool result with `isError: true` and `_meta.aicl`; other methods `-32601`; auth failure HTTP 401 + JSON-RPC `-32001`. `GET` → 405, `DELETE` ends the session. Existing agents integrate by changing only the MCP server URL |
 | `GET /healthz` | liveness + active `policy_version` |
 | `GET /admin/policy` | active policy (secrets stripped) + version |
 | `POST /admin/policy/validate` | body: YAML; returns validation errors or OK. Does not apply |
@@ -252,14 +261,17 @@ class Control(Protocol):
 | `GET /admin/metrics/latency` | p50/p95/p99 total overhead and per control |
 | `GET /admin/metrics/budgets` | usage vs limits per identity (tokens, cost, compute seconds, requests/min) |
 | `GET /admin/controls` | list of controls with enabled state, current profile action/thresholds, threat refs, test coverage counts |
+| `GET /admin/events/stream` | live audit events (server-sent events) |
+| `/admin/approvals` | HITL queue: list, details, `POST …/{id}/approve`, `POST …/{id}/reject` |
+| `GET /admin/selftest`, `POST /admin/selftest/run?ids=` | live self-test: probes with expected outcomes under the loaded policy; run them (§11.9) |
 | `GET /dashboard` | static dashboard |
 
 The `/v1/*`, `/mcp/*` and `/healthz` endpoints are CONTRACT; the `/admin/*` list is guidance for R1/R5 to refine.
 
-Auth: `Authorization: Bearer <key>`. Keys map to identities in the policy (section 6.2). Admin endpoints require an identity with role `admin`. The dashboard asks for the admin key once and sends it as Bearer; for a local demo, `AICL_ADMIN_OPEN=1` may disable admin auth when bound to localhost only.
+Auth: `Authorization: Bearer <key>`. Keys map to identities in the policy (section 6.2). Admin endpoints require an identity with role `admin`. The dashboard asks for the admin key once and sends it as Bearer; for a local demo, `AICL_ADMIN_OPEN=1` disables auth on `/admin/*` only (the `/v1/*` and `/mcp/*` endpoints always need a key).
 
-Headers sent by the client: `X-AICL-Session` (session id; generated if absent), optionally `X-AICL-Agent` (claimed agent id, checked by C-AUTH against the key's identity).
-Headers returned by the gateway: `X-AICL-Request-Id`, `X-AICL-Policy-Version`, `X-AICL-Action` (final action), `X-AICL-Overhead-Ms` (time spent in AICL excluding upstream).
+Headers sent by the client: `X-AICL-Session` (session id; generated if absent), optionally `X-AICL-Agent` (claimed agent id, checked by C-AUTH against the key's identity), `X-AICL-Approval-Id` (retry after an operator approval), `X-AICL-Delegation-Ticket` (a sub-agent joining a delegation, §6.7).
+Headers returned by the gateway: `X-AICL-Request-Id`, `X-AICL-Policy-Version`, `X-AICL-Action` (final action), `X-AICL-Overhead-Ms` (time spent in AICL excluding upstream), `X-AICL-Session` (the client's session id), `X-AICL-Delegation-Ticket` (after a delegation tool call), `Retry-After` on 429, `Mcp-Session-Id` on `/mcp/*`.
 
 ### 5.2 Normalization (done once per segment, before controls)
 
@@ -283,15 +295,15 @@ Body shape (OpenAI-style): `{"error": {"type": ..., "message": ..., "threat_ids"
 
 ### 5.4 Sessions, taint, loops (state)
 
-State is keyed by `session_id` and held behind `StateStore` (TTL-evicted):
+State is keyed by `session_id` and held behind `StateStore` (TTL-evicted, `taint.session_ttl_seconds`). The state key is `<identity>:<client session id>`: a session belongs to the identity that authenticated, so another identity can neither read nor taint it.
 - `tainted: bool` + `taint_sources: list` — set when an `untrusted` segment enters the session (tool outputs marked `output_trust: untrusted`, retrieved docs, uploads).
 - `tool_calls: deque[(tool, args_hash, ts)]` — sliding window for loop detection and per-session tool-call caps.
-- `delegation_depth`, `capability` — from the capability token.
-Budgets are keyed by `(identity, window)`.
+- `delegation_depth` — set by the gateway when a session joins a delegation (§6.7), never taken lower from the client.
+Budgets are keyed by `(identity, window)`; the requests-per-minute limit uses a sliding window.
 
 ### 5.5 Accounting
 
-Tokens come from the upstream `usage` field; if absent, estimate `len(text)/4`. Cost = tokens × per-model prices from policy. For **local models** price is 0, so budgets use `max_compute_seconds` (wall-clock time spent in the upstream call) and tokens. Mock "commercial" model with real-looking prices is used to demonstrate and test cost budgets without any paid API.
+Budget enforcement is reserve-then-settle: at ingress C-BUDGET atomically checks and reserves the estimated usage (prompt tokens ≈ `len(text)/4`, completion reserve `default_completion_reserve` per budget (default 512), cost from model prices), so concurrent requests cannot overshoot; the post stage settles the real usage and releases the reservation (Redis: per-identity lock with an owner token, released by compare-and-delete). Tokens come from the upstream `usage` field; if absent, estimate `len(text)/4`. Cost = tokens × per-model prices from policy. For **local models** price is 0, so budgets use `max_compute_seconds` (wall-clock time spent in the upstream call) and tokens. Mock "commercial" model with real-looking prices is used to demonstrate and test cost budgets without any paid API.
 
 ---
 
@@ -314,6 +326,7 @@ identities: [...]               # 6.2
 roles: {...}                    # 6.2
 models: [...]                   # 6.4
 tools: {...}                    # 6.6
+mcp_servers: {...}              # 6.6
 budgets: {...}                  # 6.5
 controls: {...}                 # 6.3
 semantic: {...}                 # 6.5
@@ -497,7 +510,7 @@ models:
   - name: ollama-local
     provider: ollama
     base_url_env: AICL_OLLAMA_URL
-    upstream_model: <TBD-small-model>   # TEAM DECISION: pick after measuring latency on our hardware
+    upstream_model: "qwen2.5:1.5b"      # Apache-2.0, low CPU latency (qwen2.5:3b is more accurate, research licence)
     local: true
     price_per_1k_tokens: {input: 0.0, output: 0.0}
 ```
@@ -516,7 +529,7 @@ budgets:
     max_identical_tool_calls: 3         # same tool + same normalized args within the loop window
     loop_window_seconds: 60
     max_delegation_depth: 2
-    on_exceed: block                    # block | throttle | downgrade_model
+    on_exceed: block                    # only `block` is implemented; other values are rejected at load
   research_default:
     window: day
     max_tokens: 500000
@@ -533,8 +546,8 @@ budgets:
 semantic:
   provider: ollama
   base_url_env: AICL_OLLAMA_URL
-  model: <TBD-small-model>
-  timeout_ms: 1500
+  model: "qwen2.5:1.5b"
+  timeout_ms: 4500                      # hybrid.yaml: 12000 (CPU); long untrusted documents are judged in up to 3 windows
   run_when:
     untrusted_segments: true            # always judge tool output / retrieved docs / uploads
     risk_between: [0.15, 0.85]          # deterministic risk in the grey zone
@@ -565,6 +578,16 @@ tools:
     backend_url_env: AICL_TOOL_SHELL_URL
     privilege: critical
     output_trust: untrusted
+  docs.search:                          # an MCP tool: "<server>.<tool name on that server>"
+    mcp_server: docs                    # instead of backend_url_env (exactly one of the two)
+    privilege: low
+    output_trust: untrusted
+
+mcp_servers:                            # proxied at /mcp/<name>
+  docs:
+    url_env: AICL_MCP_DOCS_URL
+    bearer_token_env: null              # optional token the gateway sends upstream
+    timeout_s: 30
 
 taint:
   enabled: true
@@ -579,9 +602,9 @@ memory:
     kb_hr:       {sensitivity: restricted}    # no role has it → access must be blocked (TH-10)
 ```
 
-### 6.7 Delegation / capability tokens *(stretch)*
+### 6.7 Delegation
 
-HMAC-signed token with claims `{sub, tools[], max_tokens, exp, depth, parent}`. Delegation may only **narrow** `tools`, budget and lifetime, and must increment `depth`; `depth > max_delegation_depth` → block (TH-09).
+Implemented without signed capability tokens. C-DELEG allows a delegation tool call (`delegate_task`, `call_agent`, …) to role T from role R when T has nothing R lacks (tools, models, memory namespaces) or T is listed in `roles.R.may_delegate_to`. Depth is tracked by the gateway: after a delegation call succeeds the response carries `X-AICL-Delegation-Ticket`; a sub-agent that sends it joins the delegation, its session gets the delegated depth and inherits the parent session's taint. The depth of a new delegation is max(session depth + 1, the client's `depth` argument); the limit is the smaller of the control's `max_delegation_depth` and the role budget's `max_delegation_depth` (TH-09). A ticket only adds restrictions, so a reused or unknown ticket gains nothing.
 
 ### 6.8 Signature feed (externally managed)
 
@@ -589,8 +612,9 @@ HMAC-signed token with claims `{sub, tools[], max_tokens, exp, depth, parent}`. 
 signature_feeds:
   - name: historical-attacks
     path: ./feeds/attacks.yaml          # or `url:` for a remotely managed feed
-    refresh_seconds: 30
+    refresh_seconds: 30                 # polling interval for `url:` feeds
     on_unavailable: keep_last_good
+    # signing_key_env: AICL_FEED_SIGNING_KEY   # `url:` only: HMAC-SHA256 of the body in X-AICL-Feed-Signature
 ```
 
 Feed file format (`feeds/attacks.yaml`) — separate from the policy so it can be updated by an external system:
@@ -618,7 +642,7 @@ for sig in snap.for_set("artifact"):   # signatures grouped by `set`
 snap.regex("SIG-INJ-001")              # precompiled re.Pattern for kind=regex, else None
 ```
 
-R1 calls `store.configure(policy.raw.signature_feeds)` at startup and on every policy swap, calls `store.reload()` from the single file watcher, records `current().version` as the audit `feed_version` at request start, and maps load/reject reports to `feed.reloaded` events. An invalid feed keeps its last good version (`on_unavailable: keep_last_good`) or contributes nothing (`empty`). Feed entries are validated on load (`extra=forbid`, regexes must compile, `sha256` must be 64 hex chars, ids unique). `url:` feeds are not implemented yet. Known limitation: a reload between two controls of one request can show them different versions.
+R1 calls `store.configure(policy.raw.signature_feeds)` at startup and on every policy swap, calls `store.reload()` from the single file watcher, records `current().version` as the audit `feed_version` at request start, and maps load/reject reports to `feed.reloaded` events. An invalid feed keeps its last good version (`on_unavailable: keep_last_good`) or contributes nothing (`empty`). Feed entries are validated on load (`extra=forbid`, regexes must compile, `sha256` must be 64 hex chars, ids unique). `url:` feeds are polled every `refresh_seconds` in a worker thread (never on the event loop): https anywhere or http to localhost only (the URL is parsed, credentials refused), no redirects, ETag / 304, 5 MB limit also for chunked bodies, optional HMAC check; any failure keeps the last good version and emits `feed.rejected` (`scripts/feed_server.py` serves a feed for demos). Known limitation: a reload between two controls of one request can show them different versions.
 
 ### 6.9 Audit
 
@@ -626,8 +650,9 @@ R1 calls `store.configure(policy.raw.signature_feeds)` at startup and on every p
 audit:
   path: ./data/audit.jsonl
   content: masked                       # masked | none   (raw content is never logged)
-  replay_capture: false                 # stretch: store raw requests in data/replay.jsonl (synthetic data only)
   max_event_bytes: 65536
+  max_file_bytes: 52428800              # rotation: audit.jsonl -> audit.jsonl.1 ...
+  keep_files: 5
 ```
 
 ---
@@ -642,6 +667,8 @@ Priorities: **P0** = must exist for the demo, **P1** = should, **P2** = stretch.
 | C-MODEL-ALLOW | `model_allowlist` | ingress | det. | TH-06 disallowed model | P0 | R1 |
 | C-SIZE | `size_limits` | ingress | det. | TH-20 oversized input / DoS | P0 | R1 |
 | C-INJ-PAT | `injection_patterns` | input, tool_result | det. | TH-01 direct, TH-02 indirect injection | P0 | R2 |
+| C-INJ-EMB | `injection_embedding` | input, tool_result | AI | TH-01, TH-02 (multilingual embedding similarity) | P1 | R3 |
+| C-INJ-BASTION | `injection_bastion` | input, tool_result | AI | TH-01, TH-02 (prompt-injection classifier) | P1 | R3 |
 | C-INJ-SEM | `injection_semantic` | input, tool_result | AI | TH-01, TH-02 | P1 | R3 |
 | C-PII-IN / C-PII-OUT | `pii_input` / `pii_output` | input / output, tool_result | det. | TH-03 / TH-05 PII leakage | P0 | R2 |
 | C-SECRET-IN / C-SECRET-OUT | `secrets_input` / `secrets_output` | input / output, tool_result | det. | TH-04 secrets leakage | P0 | R2 |
@@ -657,7 +684,7 @@ Priorities: **P0** = must exist for the demo, **P1** = should, **P2** = stretch.
 | C-TAINT | `taint` | tool_call | det. | TH-19 injection-driven privileged action | P2 | R3 |
 | C-DELEG | `delegation` | ingress, tool_call | det. | TH-09 delegation/privilege escalation | P2 | R3 |
 
-Ownership is split by family: **R1** ingress plumbing (auth, model allowlist, size), **R2** content detectors + feed + artifacts, **R3** authorization and state (tools, memory, budgets, loops, taint, delegation) + semantic judge. If R2 falls behind, cut C-SUPPLY and extra C-CODE-EXEC patterns first — never the tests.
+All controls in the table are implemented (21 with C-AUTH). Ownership is split by family: **R1** ingress plumbing (auth, model allowlist, size), **R2** content detectors + feed + artifacts, **R3** authorization and state (tools, memory, budgets, loops, taint, delegation) + semantic judge. If R2 falls behind, cut C-SUPPLY and extra C-CODE-EXEC patterns first — never the tests.
 
 Threat IDs TH-01…TH-20 above are a **proposal derived from the challenge brief** (auth/access, impersonation, irreversible actions, prompt injection, output leakage, memory access, runaway loops, resource consumption, code execution, unsafe deserialization, supply chain). R6 owns the final list; if IDs change, update this table and the policy in the same PR.
 
@@ -667,7 +694,8 @@ Threat IDs TH-01…TH-20 above are a **proposal derived from the challenge brief
 - **Artifact scan**: parse with `pickletools.genops`, flag `GLOBAL`/`STACK_GLOBAL`/`REDUCE` combinations that reference modules/functions listed in the feed (`os`, `subprocess`, `builtins.eval`, …). Unparseable or "broken" streams are **suspicious by default** (`reject_unparseable`), because deliberately broken pickles have been used to evade scanners. `genops` raises at the point of corruption: catch it, keep the opcodes already yielded and evaluate them — dangerous calls placed before the break still count. Also inspect archive members and refuse unknown archive formats rather than skipping them.
 - **Semantic judge**: prompt asks the local model for strict JSON `{"injection": bool, "score": 0..1, "reason": str}`; parse defensively; timeout → apply `on_error`. Judge input is truncated to `max_input_chars` and wrapped so that the judged text cannot instruct the judge. Never use the judge's output as the only control for high-impact decisions. **Alternative to a general LLM judge:** a dedicated guard/classifier model (e.g. a safety or prompt-injection guard model served by Ollama, or a small classifier via `transformers`). Likely faster per request, which would allow judging every untrusted segment — not verified on our hardware, see §14.
 - **Canary**: when `inject_into_system_prompt: true` the gateway adds canary tokens to the system prompt; they are also seeded into mock data. Any appearance in output or tool arguments proves leakage or a hijacked agent.
-- **Budget**: pre-check at ingress against counters, post-accounting after the response; concurrent requests may overshoot slightly — document it, do not hide it.
+- **Budget**: atomic reserve at ingress, settle after the response (§5.5); a refusal is 429 with `Retry-After`.
+- **Injection cascade**: C-INJ-PAT (regex + feed, bounded decoding) → C-INJ-EMB (similarity to `feeds/injection_examples.yaml`, grey zone escalates) → C-INJ-BASTION (English classifier; on the user's own messages and on terse machine output a high score needs an earlier tier to agree, otherwise the judge decides; a held-back block stands if the judge cannot answer) → C-INJ-SEM (judge sees text with PII and secrets cut out).
 - **Taint**: untrusted segments set `ctx.tainted` and session taint; `C-TAINT` blocks tools whose `privilege` ∈ `blocked_privileges_when_tainted`.
 
 ---
@@ -707,7 +735,7 @@ One JSON object per line in `audit.jsonl`:
 }
 ```
 
-Other event types: `policy.reloaded`, `policy.rejected`, `feed.reloaded`, `budget.exceeded`.
+Other event types: `policy.reloaded`, `policy.rejected`, `feed.reloaded`, `feed.rejected`, `budget.exceeded`, `config.warning` (e.g. `dev-key-*` keys in use), `approval.requested`, `approval.decided`, `approval.used`, `approval.refused`. `endpoint` may also be `mcp`; MCP events carry `detail.mcp` (`server`, `method`, `tool`, tools hidden from `tools/list`).
 Telemetry requirements: per-control and total-overhead latency (p50/p95/p99), counts by action/control/threat/identity/OWASP category, budget usage vs limits. The dashboard consumes only `/admin/*` (section 5.1).
 
 **Dashboard panels (R5):** security posture summary (active profile, controls enabled, policy version, feed version), blocked/redacted over time, top threats and OWASP/ATLAS coverage matrix (threat → control → test count), budget usage/cost per identity, latency per control (p50/p95), live event feed with filters, audit export button, last test-suite run summary (detection rate, false-positive rate).
@@ -718,7 +746,8 @@ Telemetry requirements: per-control and total-overhead latency (p50/p95/p99), co
 
 - File watcher on `policies/*.yaml` and `feeds/*.yaml`; reload within ~1 s. Manual `POST /admin/policy/reload` as fallback.
 - Parse → validate → build immutable `Policy` object → atomic pointer swap. In-flight requests finish with the policy they started with.
-- Invalid file → keep old policy, emit `policy.rejected` with a human-readable error (field path + message).
+- Invalid file → keep old policy, emit `policy.rejected` with a human-readable error (field path + message). Unknown control ids and unsupported option values (e.g. `on_exceed: throttle`) are invalid.
+- Runtime settings follow the policy on reload too: session TTL, audit content mode and rotation, feed definitions.
 - `enabled: false`, changed `action`, changed `threshold`, changed `active_profile`, changed budgets, added/removed identities, changed allowed models/tools: **all effective on the next request**.
 - Budget counters survive a policy reload (keyed by identity/window), unless the budget definition is removed.
 
@@ -727,15 +756,22 @@ Telemetry requirements: per-control and total-overhead latency (p50/p95/p99), co
 ## 10. Docker / run
 
 ```
-docker compose up            # gateway (:8080) + mock upstream + mock tools; Ollama on host or as optional service
-make dev                     # local run with auto-reload
-make test                    # full default suite (no Ollama, no internet)
-make test-live               # additionally runs tests marked `live` (real Ollama judge)
-make fuzz                    # mutation fuzzer → reports/fuzz_*.json
-make report                  # builds reports/test_report.md from the last runs
+docker compose up                       # gateway :8080 + mock LLM :9001 + mock tools :9002 + mock MCP :9003
+docker compose run --rm tests           # full suite in a container
+docker compose --profile hybrid up      # + Ollama (models pulled once) + gateway with hybrid.yaml on :8081
+docker compose --profile redis up       # with AICL_STATE_URL_OVERRIDE: shared state in Redis
+make dev                                # local run with auto-reload
+make mocks                              # mock LLM, tools and MCP server as processes
+make test                               # full default suite (no Ollama, no internet)
+make test-live                          # additionally runs tests marked `live` (real Ollama)
+make selftest                           # live self-test of a running gateway (§11.9)
+make agent                              # demo agent through the gateway (§11.10)
+make fuzz                               # mutation fuzzer → reports/fuzz_*.json
 ```
 
-Environment: `AICL_POLICY` (default `policies/default.yaml`), `AICL_KEY_*` (identity keys), `AICL_UPSTREAM_MOCK_URL`, `AICL_OLLAMA_URL`, `AICL_CANARY_*`. Provide `.env.example`; never commit real keys.
+The image runs as a non-root user; compose binds ports to 127.0.0.1 and keeps the audit log in a named volume (export through `/admin/export/audit.jsonl`); the test container runs as root only to write `reports/` to the host.
+
+Environment: `AICL_POLICY` (default `policies/default.yaml`), `AICL_KEY_*` (identity keys), `AICL_UPSTREAM_MOCK_URL`, `AICL_OLLAMA_URL`, `AICL_TOOL_*_URL`, `AICL_MCP_DOCS_URL`, `AICL_CANARY_*`, `AICL_STATE_URL`, `AICL_APPROVAL_TTL_SECONDS`. Provide `.env.example`; never commit real keys.
 
 ---
 
@@ -833,13 +869,19 @@ Takes seed attacks (`tests/cases/attacks_seed.yaml`) and produces variants: base
 ### 11.8 Judges' one-command run
 `make test` (or `docker compose run --rm tests`) must work on a clean checkout, print a short summary table, and write the report. This is a hard requirement.
 
+### 11.9 Live self-test (`aicl/selftest.py`)
+The suite above compares the code with the reference policy. The self-test answers a different question: does the **running** gateway enforce the policy **loaded now**? About 20 probes (one or more per control, plus benign chat, tool and MCP requests) are sent through the real flows; for each, the expected outcome is computed from the loaded policy (the control's action for the identity's profile, shadow mode, disabled control = "must not act"). Verdicts: PASS (the control acted as configured, or the request was stopped earlier by another control), FAIL, SKIP (identity or tool missing, rate limit, upstream down). Entry points: dashboard Tests page, `make selftest` (exit code 1 on FAIL), and the playground, whose `[Self-test]` presets show PASS/FAIL. Content probes run as `admin` to avoid the support agent's rate limit; approvals raised by probes are rejected right away.
+
+### 11.10 Demo agent (`scripts/agent_demo.py`)
+A function-calling loop: the model (`ollama-local`) receives the task and tool definitions through `/v1/chat/completions`, every proposed call is executed through `/v1/tools/invoke`, results are fed back until the model answers. Scenarios `benign`, `taint` (privileged e-mail after untrusted data → C-TAINT) and `indirect` (hidden instruction in a fetched page). `tests/core/test_agent_demo.py` runs the same loop against a scripted model in CI.
+
 ---
 
 ## 12. Non-functional targets (to verify, not assumed)
 
-- Deterministic pipeline overhead target: p95 under ~20 ms for a typical ~2 KB prompt on a laptop. *This is a target to measure in `test_perf.py`, not a measured result.*
+- Deterministic pipeline overhead target: p95 under ~20 ms for a typical ~2 KB prompt on a laptop. Measured by `test_perf.py`: p50 9.8 ms, p95 14.4 ms (`reports/perf.json`). With the AI tiers on, a request that reaches the CPU-hosted judge takes several seconds.
 - Semantic judge only in the grey zone; report how many requests reached it (cheap-path ratio) on the dashboard.
-- Stateless-by-interface: all state behind `StateStore`, so scaling out means a shared store (Redis) plus multiple gateway replicas. Say this in the slides; implement only if time remains.
+- Stateless-by-interface: all state behind `StateStore`; `RedisStore` (`AICL_STATE_URL`) is implemented and tested against a real Redis (`tests/core/test_redis_live.py`): two gateway instances share rate limits, taint and approvals. Upstream MCP sessions stay per instance and are re-created on demand.
 - Fail behaviour is explicit per control (`fail_open` / `fail_closed`) and tested.
 - Scope check: ~14 P0 controls in 24 h is ambitious. Most are small regex/ACL checks, but depth (tests, low false positives, live config changes) beats breadth. Re-evaluate P0 at hour ~8.
 
@@ -874,9 +916,13 @@ Takes seed attacks (`tests/cases/attacks_seed.yaml`) and produces variants: base
 8. **Semantic layer:** general LLM judge vs dedicated guard/classifier model — decide by measured latency and detection on our own test cases.
 9. **MCP proxy:** confirm the current MCP HTTP transport details (sessions, SSE) before building `/mcp/{server}`; fall back to `/v1/tools/invoke` if it eats too much time.
 
+**Status (v0.3):** 1: judge `qwen2.5:1.5b` by default (Apache-2.0), `qwen2.5:3b` used for measurements; the demo agent uses the policy's `ollama-local`. 2: own regex and validators. 6: taint, policy preview, fuzzer and HITL approvals built; capability tokens replaced by policy-based delegation (§6.7). 7: built from scratch on FastAPI; the ProtectAI classifier model is reused (Apache-2.0). 8: both, a classifier and an LLM judge in one cascade. 9: built (Streamable HTTP, protocol 2025-06-18), verified with the official MCP Python SDK client; stdio servers out of scope. Still open: upstream API keys for commercial models (the policy has no key setting yet); the small CPU judge sometimes blocks prompts that only contain credentials.
+
 ---
 
 ## Changelog
+
+- **v0.3 (as built)**: CONTRACT changes: `endpoint` may be `mcp` (§4, §8); `/mcp/{server}` specified as implemented (§5.1); `ToolSpec.backend_url_env` optional with new `mcp_server`, new top-level `mcp_servers` (§6.1, §6.6); `on_exceed` only `block`; `audit.replay_capture` removed, `audit.max_file_bytes` and `keep_files` added (§6.9). Guidance: AI tiers C-INJ-EMB and C-INJ-BASTION added to the cascade; `hybrid.yaml` generated from the default policy; identity-bound sessions; delegation tickets instead of capability tokens (§6.7); reserve-then-settle budgets with `Retry-After` (§5.5); remote signature feeds (§6.8); Redis shared state; HITL approvals; live self-test (§11.9) and demo agent (§11.10); Docker hardening (non-root, localhost ports, named audit volume).
 
 - **v0.2.1 (R5, guidance only)** — dashboard implemented in `aicl/dashboard/` (static, Chart.js vendored, no build step, served by the gateway at `/dashboard/`). It reads only `/healthz` and `/admin/*`; payload shapes, accepted aliases and remaining backend gaps are documented in `aicl/dashboard/README.md`. Test and fuzz reports come from `/admin/reports/latest` and `/admin/reports/fuzz` (admin-only). No CONTRACT section changed.
 - **v0.2** — split CONTRACT vs GUIDANCE; fixed semantic-judge gating (judge no longer depends on pattern hits only); secrets matched on original text (casefolding broke case-sensitive formats); `decoded` view + rule for unredactable decoded hits; replaced undefined `Decision.meta` with `risk`/`taints_session`; pseudo-streaming instead of rejecting `stream=true`; MCP proxy (P1) + tool-routing caveat; canary injection defined; removed-control semantics; budget null = no limit; Docker polling for hot reload; dashboard auth; rebalanced control ownership (R2 was overloaded); OSS/classifier options added to open decisions.

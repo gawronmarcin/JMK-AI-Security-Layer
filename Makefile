@@ -11,7 +11,7 @@ endif
 
 PYTEST  := $(BIN)/pytest
 
-.PHONY: install test test-live test-fast check-semantic fuzz report mocks dev demo lint clean
+.PHONY: install test test-live test-fast check-semantic fuzz report mocks dev demo selftest agent lint clean
 
 $(BIN)/pip:
 	$(PY) -m venv $(VENV)
@@ -53,6 +53,12 @@ dev: install                        ## gateway lokalnie z auto-reloadem (wymaga 
 
 demo: install                       ## ruch demonstracyjny dla dashboardu i prezentacji
 	$(BIN)/python scripts/demo_traffic.py $(ARGS)
+
+selftest: install                   ## self-test działającego gatewaya na BIEŻĄCEJ polityce (ARGS="--url ...")
+	$(BIN)/python scripts/selftest.py $(ARGS)
+
+agent: install                      ## prawdziwy agent (model z Ollamy) przez gateway: benign / taint / indirect
+	$(BIN)/python scripts/agent_demo.py $(ARGS)
 
 lint: install
 	$(BIN)/ruff check aicl tests

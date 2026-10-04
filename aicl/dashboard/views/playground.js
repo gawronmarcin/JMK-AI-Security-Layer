@@ -76,6 +76,11 @@ export function createPlayground(ctx) {
   let lastSig = '';
   let inFlight = false;
   let lastOutcome = null;
+  // Live self-test probes (GET /admin/selftest): presets whose expected outcome comes from the
+  // CURRENT policy; a run of an unchanged probe prompt is judged PASS / FAIL.
+  let probes = new Map();
+  let activeProbe = null;
+  let probesVersion = null;
 
   const root = el('div', { class: 'view' });
   const head = viewHeader(
@@ -100,12 +105,54 @@ export function createPlayground(ctx) {
     placeholder: 'Enter a prompt to test with the security gateway (e.g. prompt injection, PII, canary probe)... Press Ctrl+Enter to send.',
   });
 
+  const probeGroup = el('optgroup', { label: 'Self-test — expected result from the current policy' });
+  presetSelect.appendChild(probeGroup);
+
   presetSelect.addEventListener('change', () => {
-    if (presetSelect.value) {
-      promptInput.value = presetSelect.value;
+    const v = presetSelect.value;
+    activeProbe = v.startsWith('probe:') ? probes.get(v.slice(6)) || null : null;
+    if (activeProbe) {
+      promptInput.value = activeProbe.prompt;
+      if (activeProbe.identity) identitySelect.value = activeProbe.identity;
+      promptInput.focus();
+    } else if (v) {
+      promptInput.value = v;
       promptInput.focus();
     }
   });
+
+  async function loadProbes(policyVersion) {
+    if (policyVersion && policyVersion === probesVersion) return;
+    try {
+      const res = await ctx.api.selftestProbes();
+      const list = (res.data || res).probes || [];
+      probesVersion = (res.data || res).policy_version || policyVersion;
+      probes = new Map(list.filter((p) => p.prompt && p.expected).map((p) => [p.id, p]));
+      clear(probeGroup);
+      for (const p of probes.values()) {
+        const exp = p.kind === 'positive' ? 'allow' : `${p.expected.action}${p.expected.active ? '' : ', control off'}`;
+        probeGroup.appendChild(el('option', { value: `probe:${p.id}`, text: `[Self-test] ${p.label} → expect ${exp}` }));
+      }
+      if (activeProbe) activeProbe = probes.get(activeProbe.id) || null;  // expectation follows the policy
+      if (activeProbe) presetSelect.value = `probe:${activeProbe.id}`;  // rebuilt options keep the selection
+    } catch {
+      /* demo mode or no admin key: plain presets only */
+    }
+  }
+
+  /** PASS / FAIL of a playground run against the probe's expectation (same rules as aicl/selftest.py). */
+  function judgeProbe(p, o) {
+    const exp = p.expected;
+    const action = o.action || (o.ok ? 'allow' : 'block');
+    const ctl = o.details?.error?.control_id || null;
+    if (o.status === 429) return { verdict: 'SKIP', why: 'rate-limited by C-BUDGET' };
+    if (p.kind === 'positive') return action === 'allow' ? { verdict: 'PASS', why: 'allowed' } : { verdict: 'FAIL', why: `expected allow, got ${action}` };
+    if (!exp.active) return ctl === p.control ? { verdict: 'FAIL', why: `${p.control} acted although it is disabled` } : { verdict: 'PASS', why: action === 'allow' ? `${p.control} off: request passed` : `${p.control} off; still stopped by ${ctl || 'another control'}` };
+    if (exp.note.startsWith('shadow')) return action === 'allow' || action === 'flag' ? { verdict: 'PASS', why: 'shadow mode: only recorded' } : { verdict: 'FAIL', why: `shadow mode, but ${action}` };
+    if (action === exp.action && (!ctl || ctl === p.control || exp.action === 'redact')) return { verdict: 'PASS', why: `${p.control}: ${exp.action}` };
+    if ((exp.action === 'block' || exp.action === 'redact') && (action === 'block' || action === 'require_approval')) return { verdict: 'PASS', why: `stopped by ${ctl || 'another control'} (defense in depth)` };
+    return { verdict: 'FAIL', why: `expected ${exp.action} by ${p.control}, got ${action}${ctl ? ` by ${ctl}` : ''}` };
+  }
 
   const sendBtn = el('button', {
     type: 'button',
@@ -185,6 +232,8 @@ export function createPlayground(ctx) {
 
     const model = modelSelect.value || 'mock-commercial';
     const identity = identitySelect.value || null;
+    // a probe is judged only when it runs as designed: its prompt, its identity
+    const probe = activeProbe && activeProbe.prompt === prompt && (!activeProbe.identity || activeProbe.identity === identity) ? activeProbe : null;
     const t0 = performance.now();
 
     try {
@@ -200,6 +249,7 @@ export function createPlayground(ctx) {
         policyVersion: res.policyVersion || null,
         data: res.data,
         prompt,
+        probe,
       };
     } catch (err) {
       const durationMs = performance.now() - t0;
@@ -214,6 +264,7 @@ export function createPlayground(ctx) {
         error: err,
         details: err.details,
         prompt,
+        probe,
       };
     } finally {
       inFlight = false;
@@ -271,6 +322,17 @@ export function createPlayground(ctx) {
     metricsRow.appendChild(upCard);
 
     resultsBox.appendChild(metricsRow);
+
+    if (o.probe) {
+      const j = judgeProbe(o.probe, o);
+      const exp = o.probe.expected;
+      resultsBox.appendChild(el('div', { class: 'pg-expect' },
+        el('span', { class: `selftest-verdict selftest-${j.verdict.toLowerCase()}`, text: j.verdict }),
+        el('span', {}, el('span', { class: 'muted', text: 'Expected under the current policy: ' }),
+          el('code', { text: o.probe.kind === 'positive' ? 'allow' : `${exp.action} (${o.probe.control})` })),
+        el('span', { class: 'muted small', text: exp.note }),
+        el('span', { class: 'small', text: j.why })));
+    }
 
     // Controls & threats breakdown
     const securityBreakdown = el('div', { class: 'pg-breakdown' });
@@ -388,6 +450,7 @@ export function createPlayground(ctx) {
       if (sig === lastSig) return;
       lastSig = sig;
       updateOptions(state);
+      loadProbes(state.resources.policy?.data?.policy_version || state.resources.policy?.data?.version);
     },
   };
 }

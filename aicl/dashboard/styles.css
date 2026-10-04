@@ -469,3 +469,11 @@ pre.error-text { white-space: pre-wrap; color: #ffc7cb; }
 .pg-code { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 16px; max-height: 360px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 13px; line-height: 1.5; color: var(--text); margin: 8px 0 0; }
 .pg-audit-link { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 
+
+/* Live self-test (Tests view) and playground expectation */
+.selftest-verdict { display: inline-block; padding: 1px 8px; border-radius: 999px; font-weight: 700; font-size: 12px; letter-spacing: .02em; }
+.selftest-pass { background: color-mix(in srgb, var(--ok, #22c55e) 22%, transparent); color: var(--ok, #22c55e); }
+.selftest-fail { background: color-mix(in srgb, var(--err, #FF5D67) 22%, transparent); color: var(--err, #FF5D67); }
+.selftest-skip { background: color-mix(in srgb, var(--muted, #94a3b8) 22%, transparent); color: var(--muted, #94a3b8); }
+.selftest-summary { margin: 0 0 8px; }
+.pg-expect { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border, #334155); border-radius: 8px; }
