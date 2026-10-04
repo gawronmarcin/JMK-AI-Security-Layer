@@ -50,6 +50,7 @@ services:
       AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
       AICL_MCP_DOCS_URL: http://mock-mcp:9003/mcp
       AICL_STATE_URL: ${AICL_STATE_URL_OVERRIDE:-}   # empty = state in the process
+      HF_TOKEN: ${HF_TOKEN:-}
       WATCHFILES_FORCE_POLLING: "true"      # hot reload przez bind mount (macOS/Windows, §2)
     volumes:
       - ./policies:/app/policies
@@ -112,6 +113,7 @@ services:
       AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
       AICL_MCP_DOCS_URL: http://mock-mcp:9003/mcp
       AICL_STATE_URL: ${AICL_STATE_URL_OVERRIDE:-}
+      HF_TOKEN: ${HF_TOKEN:-}
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./policies:/app/policies
