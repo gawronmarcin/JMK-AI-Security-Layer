@@ -34,45 +34,45 @@ Built for the HackYeah 2026 challenge "AI Control Layer".
 
 ```mermaid
 graph TD
-    %% Klienci
-    Client("Agenci / Aplikacje / Klienci") -->|HTTP POST\nAuth: Bearer\nX-AICL-Session| Gateway
+   %% Clients
+   Client("Agents / Applications / Clients") -->|HTTP POST\nAuth: Bearer\nX-AICL-Session| Gateway
 
-    %% Bramka AICL (Gateway)
-    subgraph Gateway ["Bramka AICL (FastAPI + asyncio)"]
-        direction TB
-        Ingress["1. Ingress\n(Autoryzacja, modele, limity rozmiaru, budżet)"]
-        Input["2. Input\n(Normalizacja, det. kontrole, ew. sędzia semantyczny)"]
-        Forward["3. Forward\n(Przekierowanie żądania)"]
-        Output["4. Output\n(Skan odpowiedzi/narzędzi, redakcja, blokada)"]
-        Post["5. Post\n(Rozliczenia tokenów/czasu, zapis zdarzenia)"]
+   %% AICL Gateway
+   subgraph Gateway ["AICL Gateway (FastAPI + asyncio)"]
+      direction TB
+      Ingress["1. Ingress\n(Authorization, models, size limits, budget)"]
+      Input["2. Input\n(Normalization, deterministic checks, optional semantic judge)"]
+      Forward["3. Forward\n(Request forwarding)"]
+      Output["4. Output\n(Response/tool scan, redaction, blocking)"]
+      Post["5. Post\n(Token/time accounting, event logging)"]
 
-        Ingress --> Input
-        Input --> Forward
-        Forward --> Output
-        Output --> Post
-    end
+      Ingress --> Input
+      Input --> Forward
+      Forward --> Output
+      Output --> Post
+   end
 
-    %% Komunikacja zewnętrzna
-    Input <-->|"Tylko w szarej strefie\n(httpx)"| SemanticJudge("Sędzia Semantyczny\n(Ollama HTTP API)")
-    Forward <-->|"Zgodne z OpenAI\n(httpx)"| UpstreamLLMs("Zewnętrzne modele LLM\n(Mock / Ollama)")
-    Forward <-->|"Wywołania narzędzi\n(httpx)"| Tools("Backendy Narzędzi / Serwery MCP")
+   %% External communication
+   Input <-->|"Only in gray area\n(httpx)"| SemanticJudge("Semantic Judge\n(Ollama HTTP API)")
+   Forward <-->|"OpenAI compatible\n(httpx)"| UpstreamLLMs("External LLM Models\n(Mock / Ollama)")
+   Forward <-->|"Tool calls\n(httpx)"| Tools("Tool Backends / MCP Servers")
 
-    %% Konfiguracja i Stan
-    subgraph Core ["Konfiguracja i Stan (w pamięci)"]
-        PolicyEngine["Silnik Polityk (YAML)\n(Walidacja Pydantic, Hot-reload)"]
-        StateStore["State Store\n(Limity, sesje, pętle)"]
-        SignatureFeed["Sygnatury ataków\n(Zewnętrzny YAML)"]
-    end
-    Gateway -.- Core
+   %% Configuration and State
+   subgraph Core ["Configuration and State (in-memory)"]
+      PolicyEngine["Policy Engine (YAML)\n(Pydantic validation, Hot-reload)"]
+      StateStore["State Store\n(Limits, sessions, loops)"]
+      SignatureFeed["Attack signatures\n(External YAML)"]
+   end
+   Gateway -.- Core
 
-    %% Audyt i Obserwowalność
-    Post -->|"Zapis zdarzeń\n(asyncio.Queue)"| AuditLog[("data/audit.jsonl")]
-    AuditLog --> MetricsAggregator["Agregator metryk"]
-    MetricsAggregator --> AdminAPI["API Administracyjne\n(JSON API: /admin/*)"]
-    AdminAPI -->|"Odczyt statystyk"| Dashboard{"Dashboard\n(Statyczny HTML + JS + Chart.js)"}
-    
-    %% Klawisz admina
-    AdminUser("Administrator") -.->|"Auth: Bearer <admin_key>"| AdminAPI
+   %% Audit and Observability
+   Post -->|"Event logging\n(asyncio.Queue)"| AuditLog[("data/audit.jsonl")]
+   AuditLog --> MetricsAggregator["Metrics Aggregator"]
+   MetricsAggregator --> AdminAPI["Administrative API\n(JSON API: /admin/*)"]
+   AdminAPI -->|"Read statistics"| Dashboard{"Dashboard\n(Static HTML + JS + Chart.js)"}
+   
+   %% Admin key
+   AdminUser("Administrator") -.->|"Auth: Bearer <admin_key>"| AdminAPI
 ```
 
 A request stops at the first blocking decision (`evaluation: first_block`) or collects every decision (`collect_all`). Redactions are applied by the engine using the character spans returned by the controls; a match that has no span (found only in decoded text) is escalated to a block. The upstream model is always called without streaming so that output can be checked; if the client asked for `stream=true`, the checked response is re-emitted as server-sent events.
