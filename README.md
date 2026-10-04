@@ -41,19 +41,27 @@ graph TD
    subgraph Gateway ["AICL Gateway (FastAPI + asyncio)"]
       direction TB
       Ingress["1. Ingress\n(Authorization, models, size limits, budget)"]
-      Input["2. Input\n(Normalization, deterministic checks, optional semantic judge)"]
-      Forward["3. Forward\n(Request forwarding)"]
-      Output["4. Output\n(Response/tool scan, redaction, blocking)"]
-      Post["5. Post\n(Token/time accounting, event logging)"]
+      Norm["2. Normalization"]
+      Det["3. Protection: Deterministic"]
+      Emb["4. Protection: Embedded Vectoring"]
+      JEV["5. Protection: Fast Decision Discriminative Model"]
+      SemJudge["6. Protection: Semantic Judge"]
+      Forward["7. Forward\n(Request forwarding)"]
+      Output["8. Output\n(Response/tool scan, redaction, blocking)"]
+      Post["9. Post\n(Token/time accounting, event logging)"]
 
-      Ingress --> Input
-      Input --> Forward
+      Ingress --> Norm
+      Norm --> Det
+      Det --> Emb
+      Emb --> JEV
+      JEV --> SemJudge
+      SemJudge --> Forward
       Forward --> Output
       Output --> Post
    end
 
    %% External communication
-   Input <-->|"Only in gray area\n(httpx)"| SemanticJudge("Semantic Judge\n(Ollama HTTP API)")
+   SemJudge <-->|"Only in gray area\n(httpx)"| ExternalOllama("Semantic Judge\n(Ollama HTTP API)")
    Forward <-->|"OpenAI compatible\n(httpx)"| UpstreamLLMs("External LLM Models\n(Mock / Ollama)")
    Forward <-->|"Tool calls\n(httpx)"| Tools("Tool Backends / MCP Servers")
 
@@ -73,6 +81,7 @@ graph TD
    
    %% Admin key
    AdminUser("Administrator") -.->|"Auth: Bearer <admin_key>"| AdminAPI
+
 ```
 
 A request stops at the first blocking decision (`evaluation: first_block`) or collects every decision (`collect_all`). Redactions are applied by the engine using the character spans returned by the controls; a match that has no span (found only in decoded text) is escalated to a block. The upstream model is always called without streaming so that output can be checked; if the client asked for `stream=true`, the checked response is re-emitted as server-sent events.
