@@ -19,6 +19,7 @@ threats:
     name: Direct Prompt Injection
     category: Prompt Injection
     description: Direct instruction override or jailbreak embedded in user input
+    controls: [C-INJ-PAT, C-INJ-EMB, C-INJ-BASTION, C-INJ-SEM]
     owasp_llm: [LLM01:2025]           # Prompt Injection
     owasp_agentic: [ASI01]            # Agent Goal Hijack
     atlas: [AML.T0051.000, AML.T0054] # LLM Prompt Injection: Direct; LLM Jailbreak
@@ -27,6 +28,7 @@ threats:
     name: Indirect Prompt Injection
     category: Prompt Injection
     description: Untrusted external data (web, retrieved doc, tool output) instructs the model
+    controls: [C-INJ-PAT, C-INJ-EMB, C-INJ-BASTION, C-INJ-SEM]
     owasp_llm: [LLM01:2025]           # Prompt Injection
     owasp_agentic: [ASI01, ASI06]     # Agent Goal Hijack; Memory & Context Poisoning
     atlas: [AML.T0051.001, AML.T0070] # LLM Prompt Injection: Indirect; RAG Poisoning
@@ -35,6 +37,7 @@ threats:
     name: Inbound PII Exposure
     category: Sensitive Data
     description: PII provided in user input
+    controls: [C-PII-IN]
     owasp_llm: [LLM02:2025]           # Sensitive Information Disclosure
     owasp_agentic: []
     atlas: []                         # data-protection risk, not an adversary technique
@@ -43,6 +46,7 @@ threats:
     name: Secrets & Credentials Leakage
     category: Sensitive Data
     description: API keys, tokens, private keys or passwords leaked in prompt, output or tool results
+    controls: [C-SECRET-IN, C-SECRET-OUT]
     owasp_llm: [LLM02:2025]           # Sensitive Information Disclosure
     owasp_agentic: [ASI03]            # Identity & Privilege Abuse
     atlas: [AML.T0057, AML.T0098]     # LLM Data Leakage; AI Agent Tool Credential Harvesting
@@ -51,6 +55,7 @@ threats:
     name: Outbound PII Leakage
     category: Sensitive Data
     description: PII leaked in model output or tool response
+    controls: [C-PII-OUT]
     owasp_llm: [LLM02:2025]           # Sensitive Information Disclosure
     owasp_agentic: []
     atlas: [AML.T0057]                # LLM Data Leakage
@@ -59,6 +64,7 @@ threats:
     name: Disallowed Model Selection
     category: Access Control
     description: Calling models not permitted for the caller identity's role
+    controls: [C-MODEL-ALLOW]
     owasp_llm: [LLM03:2025]           # Supply Chain (unvetted / unapproved models)
     owasp_agentic: []
     atlas: []
@@ -67,6 +73,7 @@ threats:
     name: Unauthorized Tool Invocation / Excessive Agency
     category: Access Control
     description: Invoking tools not granted to the role or violating tool arguments schema
+    controls: [C-TOOL-ACL]
     owasp_llm: [LLM06:2025]           # Excessive Agency
     owasp_agentic: [ASI02]            # Tool Misuse
     atlas: [AML.T0053]                # AI Agent Tool Invocation
@@ -75,6 +82,7 @@ threats:
     name: Impersonation & Missing Authentication
     category: Access Control
     description: Missing/invalid API key or agent header mismatch
+    controls: [C-AUTH]
     owasp_llm: []
     owasp_agentic: [ASI03]            # Identity & Privilege Abuse
     atlas: [AML.T0012, AML.T0073]     # Valid Accounts; Impersonation
@@ -83,6 +91,7 @@ threats:
     name: Delegation & Privilege Escalation
     category: Access Control
     description: Excessive delegation depth or unauthorized capability widening
+    controls: [C-DELEG]
     owasp_llm: [LLM06:2025]           # Excessive Agency
     owasp_agentic: [ASI03, ASI07]     # Identity & Privilege Abuse; Insecure Inter-Agent Communication
     atlas: []
@@ -91,6 +100,7 @@ threats:
     name: Unauthorized Memory / RAG Access
     category: Access Control
     description: Accessing restricted memory or document namespaces
+    controls: [C-MEM-ACL]
     owasp_llm: [LLM08:2025, LLM02:2025] # Vector and Embedding Weaknesses; Sensitive Information Disclosure
     owasp_agentic: [ASI03]            # Identity & Privilege Abuse
     atlas: [AML.T0085.000]            # Data from AI Services: RAG Databases
@@ -99,6 +109,7 @@ threats:
     name: Token Overuse
     category: Denial of Service / Resources
     description: Exceeding allocated token quotas
+    controls: [C-BUDGET]
     owasp_llm: [LLM10:2025]           # Unbounded Consumption
     owasp_agentic: []
     atlas: [AML.T0034, AML.T0029]     # Cost Harvesting; Denial of AI Service
@@ -107,6 +118,7 @@ threats:
     name: Cost / Compute Overuse
     category: Denial of Service / Resources
     description: Exceeding compute seconds or dollar budget limits
+    controls: [C-BUDGET]
     owasp_llm: [LLM10:2025]           # Unbounded Consumption
     owasp_agentic: []
     atlas: [AML.T0034, AML.T0029]     # Cost Harvesting; Denial of AI Service
@@ -115,6 +127,7 @@ threats:
     name: Runaway Tool Loops
     category: Denial of Service / Resources
     description: Repeated identical tool calls or excessive calls in a session
+    controls: [C-LOOP]
     owasp_llm: [LLM10:2025, LLM06:2025] # Unbounded Consumption; Excessive Agency
     owasp_agentic: [ASI08]            # Cascading Failures
     atlas: [AML.T0034.002]            # Cost Harvesting: Agentic Resource Consumption
@@ -123,6 +136,7 @@ threats:
     name: Unsafe Deserialization
     category: Supply Chain & Code Execution
     description: Malicious pickle or model artifact containing dangerous opcodes
+    controls: [C-ARTIFACT]
     owasp_llm: [LLM03:2025]           # Supply Chain
     owasp_agentic: [ASI04, ASI05]     # Agentic Supply Chain; Unexpected Code Execution
     atlas: [AML.T0011.000, AML.T0010.003] # User Execution: Unsafe AI Artifacts; AI Supply Chain Compromise: Model
@@ -131,6 +145,7 @@ threats:
     name: Malicious Code Execution
     category: Code Execution
     description: Shell command chaining, eval/exec, reverse shells in output or tool arguments
+    controls: [C-CODE-EXEC]
     owasp_llm: [LLM05:2025]           # Improper Output Handling
     owasp_agentic: [ASI05]            # Unexpected Code Execution
     atlas: [AML.T0050, AML.T0102]     # Command and Scripting Interpreter; Generate Malicious Commands
@@ -139,6 +154,7 @@ threats:
     name: Supply Chain Compromise
     category: Supply Chain & Code Execution
     description: Malicious packages or model repos
+    controls: [C-SUPPLY]
     owasp_llm: [LLM03:2025]           # Supply Chain
     owasp_agentic: [ASI04]            # Agentic Supply Chain
     atlas: [AML.T0010, AML.T0011.001, AML.T0058] # AI Supply Chain Compromise; Malicious Package; Publish Poisoned Models
@@ -147,6 +163,7 @@ threats:
     name: Known Historical Attack Signature
     category: Threat Intelligence
     description: Input matching known attack patterns from security feed
+    controls: [C-SIG]
     owasp_llm: [LLM01:2025, LLM03:2025] # signatures cover injection and supply-chain artifacts
     owasp_agentic: [ASI01, ASI04]
     atlas: [AML.T0051, AML.T0011.000] # LLM Prompt Injection; Unsafe AI Artifacts
@@ -155,6 +172,7 @@ threats:
     name: Canary / System Prompt Leakage
     category: Sensitive Data
     description: System prompt canary token detected in output or tool call
+    controls: [C-CANARY]
     owasp_llm: [LLM07:2025]           # System Prompt Leakage
     owasp_agentic: []
     atlas: [AML.T0056]                # Extract LLM System Prompt
@@ -163,6 +181,7 @@ threats:
     name: Tainted Session Privileged Action
     category: Prompt Injection
     description: Tool call with elevated privileges requested after untrusted data entered session
+    controls: [C-TAINT]
     owasp_llm: [LLM01:2025, LLM06:2025] # Prompt Injection; Excessive Agency
     owasp_agentic: [ASI01, ASI02]     # Agent Goal Hijack; Tool Misuse
     atlas: [AML.T0051.001, AML.T0086] # Indirect Prompt Injection; Exfiltration via AI Agent Tool Invocation
@@ -171,6 +190,7 @@ threats:
     name: Oversized Input / DoS
     category: Denial of Service / Resources
     description: Excessive message count, oversized message characters or payload bytes
+    controls: [C-SIZE]
     owasp_llm: [LLM10:2025]           # Unbounded Consumption
     owasp_agentic: []
     atlas: [AML.T0029]                # Denial of AI Service
