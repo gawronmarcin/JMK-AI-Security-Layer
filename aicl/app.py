@@ -32,7 +32,7 @@ from aicl.admin import approvals as admin_approvals
 from aicl.admin import policy as admin_policy
 from aicl.admin import telemetry as admin_telemetry
 from aicl.approvals import DEFAULT_TTL_SECONDS, ApprovalStore
-from aicl.audit import AuditWriter
+from aicl.audit import AuditWriter, new_event
 from aicl.flows.artifact_scan import handle_artifact_scan
 from aicl.flows.chat import handle_chat
 from aicl.flows.common import BodyReader, BodyTooLarge, FlowResponse
@@ -93,7 +93,8 @@ def create_app(
 
     from aicl.state import set_store
 
-    state, approvals = _shared_state(env)
+    session_ttl = policy.raw.taint.session_ttl_seconds if policy.raw.taint else 3600
+    state, approvals = _shared_state(env, session_ttl_seconds=session_ttl)
     rt = Runtime(
         policy=policy,
         env=env,
@@ -108,6 +109,23 @@ def create_app(
         approvals=approvals,
     )
     set_store(rt.state)
+
+    dev_keys = []
+    for ident in policy.raw.identities:
+        key_val = env.get(ident.api_key_env, "")
+        if key_val.startswith("dev-key-"):
+            dev_keys.append(ident.id)
+    if dev_keys:
+        import logging
+
+        logging.getLogger(__name__).warning("Identities using dev-key-* in configuration: %s", dev_keys)
+        rt.audit.emit(
+            new_event(
+                "config.warning",
+                policy_version=policy.version,
+                detail={"warning": "identities using dev-key-*", "identities": dev_keys},
+            )
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -132,6 +150,7 @@ def create_app(
             "status": "ok",
             "policy_version": rt.policy.version,
             "feed_version": rt.feeds.current().version,
+            "feeds": rt.feeds.feed_metadata(),
             "detectors": detector_status(),
         }
 
@@ -172,18 +191,20 @@ class _RevalidatedStaticFiles(StaticFiles):
         return response
 
 
-def _shared_state(env: Mapping[str, str]) -> tuple[Any, Any]:
+def _shared_state(env: Mapping[str, str], session_ttl_seconds: int = 3600) -> tuple[Any, Any]:
     """Budgets, sessions and HITL approvals: in this process by default; in Redis when
     AICL_STATE_URL is set, so several gateway instances behind a load balancer share them."""
     ttl = int(env.get("AICL_APPROVAL_TTL_SECONDS", DEFAULT_TTL_SECONDS))
     url = env.get("AICL_STATE_URL")
     if not url:
-        return InMemoryStore(), ApprovalStore(ttl_seconds=ttl)
+        return InMemoryStore(session_ttl_seconds=session_ttl_seconds), ApprovalStore(ttl_seconds=ttl)
     try:
         from aicl.approvals import RedisApprovalStore
         from aicl.state.redis_store import RedisStore
 
-        return RedisStore.from_url(url), RedisApprovalStore.from_url(url, ttl_seconds=ttl)
+        return RedisStore.from_url(url, session_ttl_seconds=session_ttl_seconds), RedisApprovalStore.from_url(
+            url, ttl_seconds=ttl
+        )
     except ImportError as exc:
         raise RuntimeError('AICL_STATE_URL is set but the redis package is missing: pip install -e ".[redis]"') from exc
 

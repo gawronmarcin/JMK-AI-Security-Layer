@@ -120,6 +120,7 @@ def router(rt: Runtime) -> APIRouter:
                 "version": rt.policy.version,
                 "policy_version": rt.policy.version,
                 "feed_version": rt.feeds.current().version,
+                "feeds": rt.feeds.feed_metadata(),
                 "loaded_at": last.get("at"),
                 "last_reload_result": last.get("result"),
                 "last_reload_error": last.get("error"),

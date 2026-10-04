@@ -328,10 +328,14 @@ class RequestRecord:
                     },
                 )
             )
+        headers = self.response_headers(action)
+        if exc.type == ErrorType.budget_exceeded and exc.decision and exc.decision.retry_after_s is not None:
+            import math
+            headers["Retry-After"] = str(math.ceil(exc.decision.retry_after_s))
         return FlowResponse(
             status=exc.status,
             body=exc.body(self.request_id).model_dump(mode="json"),
-            headers=self.response_headers(action),
+            headers=headers,
         )
 
 
@@ -487,18 +491,29 @@ async def account_usage(rt: Runtime, rec: RequestRecord) -> None:
     budget = rec.policy.budget_for(rec.identity.role)
     window = budget.window if budget else "day"
     usage = rec.usage or Usage()
-    await rt.state.add_usage(
-        rec.identity.id,
-        window,
-        requests=1,
+
+    settled = await rt.state.settle(
+        rec.request_id,
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         cost_usd=usage.cost_usd,
         compute_seconds=usage.compute_seconds,
     )
-    if window != "minute":
-        # max_requests_per_minute is checked against the minute window, whatever the budget window.
-        await rt.state.add_usage(rec.identity.id, "minute", requests=1)
+    if not settled:
+        if any(d.control_id in _BUDGET_CONTROLS and d.action == Action.block for d in rec.decisions()):
+            return
+        await rt.state.add_usage(
+            rec.identity.id,
+            window,
+            requests=1,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cost_usd=usage.cost_usd,
+            compute_seconds=usage.compute_seconds,
+        )
+        if window != "minute":
+            # max_requests_per_minute is checked against the minute window, whatever the budget window.
+            await rt.state.add_usage(rec.identity.id, "minute", requests=1)
 
 
 def string_leaves(value: Any) -> list[tuple[list[Any], str]]:

@@ -3,7 +3,7 @@
 # An invalid file is rejected and the previous policy stays active.
 
 version: 1
-meta: {name: default-policy, description: "Sample policy, 3 strictness levels"}
+meta: {name: hybrid-policy, description: "Hybrid multi-tier defense"}
 
 active_profile: balanced        # strict | balanced | permissive (identity may override)
 mode: enforce                   # enforce | shadow  (per-control `mode` overrides)
@@ -162,7 +162,7 @@ controls:
     on_error: fail_open                 # embedding service down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | ollama (/api/embed)
+      backend: ollama                   # none (skipped) | ollama (/api/embed)
       url_env: AICL_OLLAMA_URL
       model: bge-m3                     # multilingual; ollama pull bge-m3
       corpus: ./feeds/injection_examples.yaml
@@ -187,7 +187,7 @@ controls:
     on_error: fail_open                 # classifier down must not take the gateway down
     stages: [input, tool_result]
     params:
-      backend: none                     # none (skipped) | protectai (ONNX, Apache-2.0) | bastion (SDK, AGPL-3.0) | remote (HTTP /protect)
+      backend: protectai                # none (skipped) | protectai (ONNX, Apache-2.0) | bastion (SDK, AGPL-3.0) | remote (HTTP /protect)
       url_env: AICL_BASTION_URL         # remote: e.g. http://localhost:8090 (Bastion Docker image or a compatible sidecar)
       model: ""                         # HF repo id; empty = the backend's default (protectai: ProtectAI/deberta-v3-base-prompt-injection-v2)
       timeout_ms: 300
@@ -201,12 +201,11 @@ controls:
       languages: [en]
       other_languages: skip             # skip | escalate | classify
       corroborate: true
-      corroborate_untrusted: true
       corroborate_min_risk: 0.30
     levels:
-      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25, other_languages: escalate, corroborate: false, corroborate_untrusted: false}
-      balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30, corroborate_untrusted: true}
-      permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40, corroborate_untrusted: true}
+      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25, other_languages: escalate, corroborate: false}
+      balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30}
+      permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40}
     
   pii_input:
     id: C-PII-IN

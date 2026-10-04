@@ -65,6 +65,7 @@ class Runtime:
     async def start(self) -> None:
         await self.audit.start()
         await self.upstream.start()
+        self.feeds.env = self.env
         self.feeds.on_event = self._feed_event
         self.feeds.configure(self.policy.raw.signature_feeds, force=True)
         listener_errors = self._notify(self.policy)
@@ -119,6 +120,13 @@ class Runtime:
 
         old = self.policy
         self.policy = new  # atomic swap: one attribute assignment
+        if hasattr(self.state, "session_ttl_seconds"):
+            self.state.session_ttl_seconds = float(new.raw.taint.session_ttl_seconds)
+        self.audit.content_mode = new.raw.audit.content
+        if hasattr(self.audit, "max_file_bytes"):
+            self.audit.max_file_bytes = new.raw.audit.max_file_bytes
+        if hasattr(self.audit, "keep_files"):
+            self.audit.keep_files = new.raw.audit.keep_files
         self.feeds.configure(new.raw.signature_feeds)
         listener_errors = self._notify(new)
         detail = {
@@ -149,6 +157,7 @@ class Runtime:
             await asyncio.sleep(interval)
             try:
                 self.check_files()
+                self.feeds.poll_remote()
             except Exception:
                 log.exception("hot reload check failed")
 
@@ -180,6 +189,7 @@ class Runtime:
         self.audit.emit(new_event("policy.reloaded", policy_version=policy.version, detail=detail))
 
     def _feed_event(self, detail: dict, error: str | None) -> None:
+        event_type = "feed.rejected" if detail.get("status") == "rejected" else "feed.reloaded"
         self.audit.emit(
-            new_event("feed.reloaded", feed_version=detail.get("feed_version"), detail=detail, error=error)
+            new_event(event_type, feed_version=detail.get("feed_version"), detail=detail, error=error)
         )

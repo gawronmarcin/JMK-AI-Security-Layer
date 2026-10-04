@@ -31,7 +31,6 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 
 from aicl import registry
 from aicl.admin.policy import _require_admin
-from aicl.audit import iter_events
 from aicl.models import SEVERITY_RANK, AuditEvent
 from aicl.runtime import Runtime
 from aicl.state import window_bucket
@@ -90,19 +89,46 @@ class _EventCache:
 
     def __init__(self, rt: Runtime):
         self.rt = rt
-        self._sig: tuple[int, int] | None = None
+        self._offset: int = 0
         self._disk: list[AuditEvent] = []
 
     def all(self) -> list[AuditEvent]:
         path = self.rt.audit.path
         try:
             st = path.stat()
-            sig: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+            size = st.st_size
         except OSError:
-            sig = None
-        if sig != self._sig:
-            self._disk = list(iter_events(path)) if sig else []
-            self._sig = sig
+            self._offset = 0
+            self._disk = []
+            return list(self.rt.audit.recent_events())
+
+        if size < self._offset:
+            # File was truncated or rotated
+            self._offset = 0
+            self._disk = []
+
+        if size > self._offset:
+            try:
+                with path.open("rb") as f:
+                    f.seek(self._offset)
+                    chunk = f.read(size - self._offset)
+                    last_nl = chunk.rfind(b"\n")
+                    if last_nl != -1:
+                        valid_bytes = chunk[: last_nl + 1]
+                        self._offset += len(valid_bytes)
+                        for line in valid_bytes.splitlines():
+                            line = line.strip()
+                            if line:
+                                try:
+                                    self._disk.append(AuditEvent.model_validate_json(line))
+                                except Exception:
+                                    pass
+            except OSError:
+                pass
+
+            if len(self._disk) > 100_000:
+                self._disk = self._disk[-100_000:]
+
         known = {e.event_id for e in self._disk}
         return self._disk + [e for e in self.rt.audit.recent_events() if e.event_id not in known]
 
@@ -400,13 +426,34 @@ def router(rt: Runtime) -> APIRouter:
         return StreamingResponse(sse(), media_type="text/event-stream")
 
     @r.get("/export/audit.jsonl")
-    async def export_audit(request: Request) -> Response:
+    async def export_audit(
+        request: Request,
+        include_rotated: bool = Query(False, description="Include rotated audit files"),
+    ) -> Response:
         if (denied := guard(request)) is not None:
             return denied
-        if not rt.audit.path.exists():
-            return Response(content="", media_type="application/x-ndjson")
-        return FileResponse(
-            path=str(rt.audit.path), filename="audit.jsonl", media_type="application/x-ndjson"
+        if not include_rotated:
+            if not rt.audit.path.exists():
+                return Response(content="", media_type="application/x-ndjson")
+            return FileResponse(
+                path=str(rt.audit.path), filename="audit.jsonl", media_type="application/x-ndjson"
+            )
+
+        async def stream_all() -> AsyncIterator[bytes]:
+            keep = getattr(rt.audit, "keep_files", 5)
+            candidates = [rt.audit.path.with_name(f"{rt.audit.path.name}.{i}") for i in range(keep, 0, -1)] + [
+                rt.audit.path
+            ]
+            for f in candidates:
+                if f.exists():
+                    with f.open("rb") as fp:
+                        while chunk := fp.read(65536):
+                            yield chunk
+
+        return StreamingResponse(
+            stream_all(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": 'attachment; filename="audit_all.jsonl"'},
         )
 
     @r.get("/reports/latest")

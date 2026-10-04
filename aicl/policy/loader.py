@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import ValidationError
@@ -33,7 +34,11 @@ def _format_validation(exc: ValidationError) -> list[str]:
     return lines
 
 
-def parse_policy(source: str, env: Mapping[str, str] | None = None) -> CompiledPolicy:
+def parse_policy(
+    source: str,
+    env: Mapping[str, str] | None = None,
+    known_controls: Any | None = None,
+) -> CompiledPolicy:
     try:
         data = yaml.safe_load(source)
     except yaml.YAMLError as exc:
@@ -45,10 +50,14 @@ def parse_policy(source: str, env: Mapping[str, str] | None = None) -> CompiledP
     except ValidationError as exc:
         raise PolicyError(_format_validation(exc)) from exc
     try:
-        return compile_policy(raw, source, env)
+        return compile_policy(raw, source, env, known_controls=known_controls)
     except ValueError as exc:
         raise PolicyError([str(exc)]) from exc
 
 
-def load_policy_file(path: str | Path, env: Mapping[str, str] | None = None) -> CompiledPolicy:
-    return parse_policy(Path(path).read_text(encoding="utf-8"), env)
+def load_policy_file(
+    path: str | Path,
+    env: Mapping[str, str] | None = None,
+    known_controls: Any | None = None,
+) -> CompiledPolicy:
+    return parse_policy(Path(path).read_text(encoding="utf-8"), env, known_controls=known_controls)

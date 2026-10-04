@@ -144,6 +144,7 @@ class Decision(_Model):
     latency_ms: float = 0.0  # filled by the engine
     skipped: bool = False
     shadow_suppressed: bool = False
+    retry_after_s: float | None = None
 
 
 @runtime_checkable
@@ -161,7 +162,8 @@ class Control(Protocol):
 # --- Audit event (§8) -------------------------------------------------------------------------
 
 EventType = Literal[
-    "request", "policy.reloaded", "policy.rejected", "feed.reloaded", "budget.exceeded",
+    "request", "policy.reloaded", "policy.rejected", "feed.reloaded", "feed.rejected", "budget.exceeded",
+    "config.warning",
     # HITL (aicl/approvals.py): a request needs approval / an approval was used or refused
     "approval.requested", "approval.decided", "approval.used", "approval.refused",
 ]

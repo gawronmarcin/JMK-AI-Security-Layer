@@ -150,14 +150,17 @@ make lint          # Weryfikacja jakości kodu (ruff)
 # Uruchomienie bramki z mockami LLM i narzędzi:
 docker compose up
 
+# Uruchomienie pełnego stosu hybrydowego (bramka + Ollama z bge-m3 i qwen2.5):
+docker compose --profile hybrid up
+
 # Uruchomienie pełnego suite testów w kontenerze:
 docker compose run --rm tests
 
-# Uruchomienie z profilem Ollama (dla prawdziwych modeli AI):
-docker compose --profile ollama up
-
 # Uruchomienie z profilem Bastion (zewnętrzny mikroserwis klasyfikatora):
 docker compose --profile bastion up
+
+# Uruchomienie niezależnego serwera sygnatur (zdalny feed z ETag i HMAC):
+python scripts/feed_server.py --port 8088 --feed feeds/attacks.yaml
 ```
 
 Bramka uruchomi się na porcie `:8080`, mock LLM na `:9001`, a mock narzędzi na `:9002`.

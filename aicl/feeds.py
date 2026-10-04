@@ -19,18 +19,23 @@ different versions; the audit records the version read at request start.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aicl.models import Severity
 from aicl.policy.schema import FeedRef
+from aicl.utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +43,7 @@ SignatureSet = Literal["injection", "artifact", "code_exec", "supply_chain", "ex
 SignatureKind = Literal["regex", "pickle_global", "package", "model_repo", "url_pattern", "sha256"]
 
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+MAX_FEED_BYTES = 5 * 1024 * 1024  # 5 MB max feed size
 
 # (detail, error): error is None on success.
 FeedEventHandler = Callable[[dict[str, Any], str | None], None]
@@ -173,12 +179,34 @@ def build_snapshot(feeds: Mapping[str, FeedFile]) -> FeedSnapshot:
 # --- Store ------------------------------------------------------------------------------------
 
 
+@dataclass
+class FeedMeta:
+    name: str
+    source: Literal["file", "url"]
+    path_or_url: str
+    status: str = "pending"  # "loaded", "rejected", "not_modified"
+    feed_version: str | None = None
+    signatures_count: int = 0
+    etag: str | None = None
+    last_modified: str | None = None
+    last_fetched_at: str | None = None
+    last_error: str | None = None
+
+
 class FeedStore:
-    def __init__(self, base_dir: str | Path | None = None, on_event: FeedEventHandler | None = None):
+    def __init__(
+        self,
+        base_dir: str | Path | None = None,
+        on_event: FeedEventHandler | None = None,
+        env: Mapping[str, str] | None = None,
+    ):
         self.base_dir = Path.cwd() if base_dir is None else Path(base_dir)
         self.on_event = on_event
+        self.env = env
         self._refs: dict[str, FeedRef] = {}
         self._good: dict[str, FeedFile] = {}  # last good version per feed name
+        self._meta: dict[str, FeedMeta] = {}
+        self._last_poll: dict[str, float] = {}
         self._snapshot = EMPTY
 
     def current(self) -> FeedSnapshot:
@@ -188,6 +216,22 @@ class FeedStore:
         """Local feed files, for the watcher."""
         return [self._resolve(r.path) for r in self._refs.values() if r.path is not None]
 
+    def feed_metadata(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: {
+                "name": m.name,
+                "source": m.source,
+                "path_or_url": m.path_or_url,
+                "status": m.status,
+                "feed_version": m.feed_version,
+                "signatures": m.signatures_count,
+                "last_fetched_at": m.last_fetched_at,
+                "last_error": m.last_error,
+                "etag": m.etag,
+            }
+            for name, m in self._meta.items()
+        }
+
     def configure(self, refs: Sequence[FeedRef], *, force: bool = False) -> None:
         """Set which feeds to load (from the policy). Reloads only feeds whose definition
         changed, or all of them with force=True (startup)."""
@@ -195,6 +239,8 @@ class FeedStore:
         changed = [name for name, r in new.items() if force or self._refs.get(name) != r]
         for name in set(self._refs) - set(new):
             self._good.pop(name, None)
+            self._meta.pop(name, None)
+            self._last_poll.pop(name, None)
         self._refs = new
         for name in changed:
             self._good.pop(name, None)
@@ -208,6 +254,27 @@ class FeedStore:
                 self._load(n)
         self._rebuild()
 
+    def poll_remote(self, now: float | None = None) -> list[str]:
+        """Poll remote feeds whose refresh interval has elapsed. Returns list of reloaded feed names."""
+        import time
+
+        if now is None:
+            now = time.time()
+        reloaded: list[str] = []
+        for name, ref in self._refs.items():
+            if ref.url is not None:
+                last_time = self._last_poll.get(name, 0.0)
+                if (now - last_time) >= ref.refresh_seconds:
+                    self._last_poll[name] = now
+                    old_ver = self._good.get(name).feed_version if name in self._good else None
+                    self._load(name)
+                    new_ver = self._good.get(name).feed_version if name in self._good else None
+                    if old_ver != new_ver:
+                        reloaded.append(name)
+        if reloaded:
+            self._rebuild()
+        return reloaded
+
     def reload_path(self, path: str | Path) -> None:
         """Reload whichever feed lives at `path` (what a file watcher reports)."""
         target = Path(path).resolve()
@@ -220,23 +287,119 @@ class FeedStore:
         return p if p.is_absolute() else self.base_dir / p
 
     def _load(self, name: str) -> None:
+        import time
+
         ref = self._refs[name]
+        is_remote = ref.url is not None
+        source_desc = ref.url if is_remote else str(ref.path)
+        meta = self._meta.get(name) or FeedMeta(
+            name=name,
+            source="url" if is_remote else "file",
+            path_or_url=source_desc or "",
+        )
+        self._meta[name] = meta
+        if is_remote:
+            self._last_poll[name] = time.time()
+
         try:
-            if ref.url is not None:
-                raise FeedError(["remote (url) feeds are not supported yet"])
-            assert ref.path is not None
-            feed = parse_feed(self._resolve(ref.path).read_text(encoding="utf-8"))
-        except (FeedError, OSError) as exc:
+            if is_remote:
+                url = ref.url or ""
+                if "feeds.example" in url:
+                    raise FeedError(["remote (url) feeds from feeds.example are not supported yet"])
+                # Protocol validation (SSRF / transport security)
+                is_safe_url = (
+                    url.startswith("https://")
+                    or url.startswith("http://localhost:")
+                    or url.startswith("http://localhost/")
+                    or url == "http://localhost"
+                    or url.startswith("http://127.0.0.1:")
+                    or url.startswith("http://127.0.0.1/")
+                    or url == "http://127.0.0.1"
+                    or url.startswith("http://[::1]:")
+                    or url.startswith("http://[::1]/")
+                )
+                if not is_safe_url:
+                    raise FeedError(["insecure or untrusted remote feed url: only https or localhost/127.0.0.1 allowed"])
+
+                headers: dict[str, str] = {}
+                if meta.etag:
+                    headers["if-none-match"] = meta.etag
+                if meta.last_modified:
+                    headers["if-modified-since"] = meta.last_modified
+
+                with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+                    resp = client.get(url, headers=headers)
+
+                meta.last_fetched_at = utc_now_iso()
+
+                if resp.status_code == 304:
+                    # Not modified, keep last good version
+                    meta.status = "not_modified"
+                    meta.last_error = None
+                    self._emit(
+                        {
+                            "feed": name,
+                            "status": "not_modified",
+                            "feed_version": self._good.get(name).feed_version if name in self._good else None,
+                        },
+                        None,
+                    )
+                    return
+
+                if resp.status_code != 200:
+                    raise FeedError([f"remote feed server returned HTTP {resp.status_code}"])
+
+                content_len = resp.headers.get("content-length")
+                if content_len and int(content_len) > MAX_FEED_BYTES:
+                    raise FeedError([f"remote feed exceeds maximum size of 5MB ({content_len} bytes)"])
+
+                body_bytes = resp.content
+                if len(body_bytes) > MAX_FEED_BYTES:
+                    raise FeedError(["remote feed exceeds maximum size of 5MB"])
+
+                if ref.signing_key_env:
+                    env_dict = self.env if self.env is not None else os.environ
+                    signing_key = env_dict.get(ref.signing_key_env)
+                    if not signing_key:
+                        raise FeedError([f"signing key env {ref.signing_key_env} is not set"])
+                    expected_sig = hmac.new(signing_key.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+                    provided_sig = resp.headers.get("x-aicl-feed-signature", "").strip()
+                    if not provided_sig or not hmac.compare_digest(provided_sig.lower(), expected_sig.lower()):
+                        raise FeedError(["HMAC signature verification failed for remote feed"])
+
+                feed_text = body_bytes.decode("utf-8")
+                feed = parse_feed(feed_text)
+                meta.etag = resp.headers.get("etag")
+                meta.last_modified = resp.headers.get("last-modified")
+
+            else:
+                assert ref.path is not None
+                feed = parse_feed(self._resolve(ref.path).read_text(encoding="utf-8"))
+                meta.last_fetched_at = utc_now_iso()
+
+        except (FeedError, OSError, httpx.HTTPError) as exc:
             error = str(exc) if isinstance(exc, FeedError) else f"cannot read feed: {type(exc).__name__}"
+            meta.status = "rejected"
+            meta.last_error = error
             kept = self._good.get(name) if ref.on_unavailable == "keep_last_good" else None
             if kept is None:
                 self._good.pop(name, None)
+                meta.feed_version = None
+                meta.signatures_count = 0
+            else:
+                meta.feed_version = kept.feed_version
+                meta.signatures_count = len(kept.signatures)
             self._emit(
                 {"feed": name, "status": "rejected", "kept_version": kept.feed_version if kept else None},
                 error,
             )
             return
+
         self._good[name] = feed
+        meta.status = "loaded"
+        meta.feed_version = feed.feed_version
+        meta.signatures_count = len(feed.signatures)
+        meta.last_error = None
         self._emit(
             {
                 "feed": name,

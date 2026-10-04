@@ -91,7 +91,8 @@ class BudgetSpec(_Strict):
     max_identical_tool_calls: int | None = None
     loop_window_seconds: int = 60
     max_delegation_depth: int | None = None
-    on_exceed: Literal["block", "throttle", "downgrade_model"] = "block"
+    on_exceed: Literal["block"] = "block"
+    default_completion_reserve: int = 512
 
 
 class LevelSpec(BaseModel):
@@ -160,6 +161,7 @@ class FeedRef(_Strict):
     url: str | None = None
     refresh_seconds: int = 30
     on_unavailable: Literal["keep_last_good", "empty"] = "keep_last_good"
+    signing_key_env: str | None = None
 
     @model_validator(mode="after")
     def _one_source(self) -> FeedRef:
@@ -171,8 +173,9 @@ class FeedRef(_Strict):
 class AuditSpec(_Strict):
     path: str = "./data/audit.jsonl"
     content: Literal["masked", "none"] = "masked"
-    replay_capture: bool = False
     max_event_bytes: int = 65536
+    max_file_bytes: int = 50 * 1024 * 1024
+    keep_files: int = 5
 
 
 # --- Whole file -------------------------------------------------------------------------------
@@ -326,7 +329,10 @@ class CompiledPolicy:
 
 
 def compile_policy(
-    raw: PolicyFile, source: str | bytes, env: Mapping[str, str] | None = None
+    raw: PolicyFile,
+    source: str | bytes,
+    env: Mapping[str, str] | None = None,
+    known_controls: Any | None = None,
 ) -> CompiledPolicy:
     """Build the runtime form. Raises ValueError on problems only detectable with the env."""
     env = os.environ if env is None else env
@@ -345,6 +351,14 @@ def compile_policy(
         if key in by_key:
             raise ValueError(f"identities {by_key[key].id!r} and {ident.id!r} share the same API key")
         by_key[key] = ident
+
+    if known_controls is not None:
+        known = set(known_controls)
+        for key, spec in raw.controls.items():
+            if spec.id not in known:
+                raise ValueError(
+                    f"unknown control id {spec.id!r} (known: {', '.join(sorted(known))})"
+                )
 
     controls: dict[str, ControlSpec] = {}
     levels: dict[tuple[str, Profile], ControlLevelConfig] = {}

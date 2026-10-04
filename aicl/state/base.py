@@ -43,6 +43,23 @@ class UsageCounters:
         return self.prompt_tokens + self.completion_tokens
 
 
+@dataclass
+class BudgetLimits:
+    max_requests_per_minute: int | None = None
+    max_tokens: int | None = None
+    max_cost_usd: float | None = None
+    max_compute_seconds: float | None = None
+
+
+@dataclass
+class ReserveResult:
+    allowed: bool
+    exceeded_limit: str | None = None  # "rpm", "tokens", "cost", "compute"
+    current_value: float = 0.0
+    limit_value: float = 0.0
+    retry_after_s: float | None = None
+
+
 def window_bucket(window: Window, now: float | None = None) -> tuple[str, float]:
     """Fixed-window bucket: ("day:20364", expires_at). UTC-aligned."""
     now = time.time() if now is None else now
@@ -74,6 +91,27 @@ class StateStore(Protocol):
         cost_usd: float = 0.0,
         compute_seconds: float = 0.0,
     ) -> UsageCounters: ...
+
+    async def check_and_reserve(
+        self,
+        identity: str,
+        window: Window,
+        request_id: str,
+        *,
+        tokens: int,
+        cost_usd: float,
+        limits: BudgetLimits,
+    ) -> ReserveResult: ...
+
+    async def settle(
+        self,
+        request_id: str,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost_usd: float = 0.0,
+        compute_seconds: float = 0.0,
+    ) -> bool: ...
 
     async def all_usage(self) -> dict[tuple[str, str], UsageCounters]:
         """Current counters per (identity, bucket key), for /admin/metrics/budgets."""

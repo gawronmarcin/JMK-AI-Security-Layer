@@ -10,11 +10,20 @@ gateway uses InMemoryStore. Same semantics as InMemoryStore:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
 
-from aicl.state.base import SessionState, ToolCallRecord, UsageCounters, Window, window_bucket
+from aicl.state.base import (
+    BudgetLimits,
+    ReserveResult,
+    SessionState,
+    ToolCallRecord,
+    UsageCounters,
+    Window,
+    window_bucket,
+)
 from aicl.state.memory import MAX_TOOL_CALLS_KEPT
 
 PREFIX = "aicl"
@@ -143,6 +152,186 @@ class RedisStore:
         pipe.hgetall(key)
         *_, raw = await pipe.execute()
         return self._counters(raw)
+
+    async def _acquire_lock(self, identity: str, timeout: float = 5.0) -> bool:
+        lock_key = self._k("lock", "budget", identity)
+        deadline = self._clock() + timeout
+        while self._clock() < deadline:
+            res = await self.r.set(lock_key, "1", nx=True, ex=10)
+            if res:
+                return True
+            await asyncio.sleep(0.01)
+        return False
+
+    async def _release_lock(self, identity: str) -> None:
+        lock_key = self._k("lock", "budget", identity)
+        await self.r.delete(lock_key)
+
+    async def check_and_reserve(
+        self,
+        identity: str,
+        window: Window,
+        request_id: str,
+        *,
+        tokens: int,
+        cost_usd: float,
+        limits: BudgetLimits,
+    ) -> ReserveResult:
+        now = self._clock()
+        await self._acquire_lock(identity)
+        try:
+            # 1. Rate limit (sliding window of 60 seconds)
+            rpm_key = self._k("rpm", identity)
+            raw_ts = await self.r.lrange(rpm_key, 0, -1)
+            timestamps = []
+            for t in raw_ts:
+                try:
+                    timestamps.append(float(_s(t)))
+                except ValueError:
+                    pass
+            cutoff = now - 60.0
+            filtered_ts = [t for t in timestamps if t > cutoff]
+
+            min_key, min_exp = self._usage_key(identity, "minute")
+            min_usage = self._counters(await self.r.hgetall(min_key))
+            current_rpm = max(len(filtered_ts), min_usage.requests)
+
+            if limits.max_requests_per_minute is not None and current_rpm >= limits.max_requests_per_minute:
+                oldest = filtered_ts[0] if filtered_ts else now - 30.0
+                retry_after = max(1.0, (oldest + 60.0) - now)
+                return ReserveResult(
+                    allowed=False,
+                    exceeded_limit="rpm",
+                    current_value=float(current_rpm),
+                    limit_value=float(limits.max_requests_per_minute),
+                    retry_after_s=retry_after,
+                )
+
+            # 2. Token & cost limits
+            key, bucket_exp = self._usage_key(identity, window)
+            counters = self._counters(await self.r.hgetall(key))
+
+            bucket, _ = window_bucket(window, now)
+            active_res_key = self._k("active_res", identity, bucket)
+            raw_res_ids = await self.r.lrange(active_res_key, 0, -1)
+            reserved_tokens = 0
+            reserved_cost = 0.0
+            valid_res_ids = []
+
+            for r_id in raw_res_ids:
+                s_id = _s(r_id)
+                r_key = self._k("res", s_id)
+                r_data = await self.r.hgetall(r_key)
+                if r_data:
+                    valid_res_ids.append(s_id)
+                    d = {_s(k): _s(v) for k, v in r_data.items()}
+                    reserved_tokens += int(d.get("tokens", 0))
+                    reserved_cost += float(d.get("cost_usd", 0.0))
+
+            total_tokens = counters.tokens + reserved_tokens + tokens
+            if limits.max_tokens is not None and total_tokens > limits.max_tokens:
+                retry_after = max(1.0, bucket_exp - now)
+                return ReserveResult(
+                    allowed=False,
+                    exceeded_limit="tokens",
+                    current_value=float(counters.tokens + reserved_tokens),
+                    limit_value=float(limits.max_tokens),
+                    retry_after_s=retry_after,
+                )
+
+            total_cost = counters.cost_usd + reserved_cost + cost_usd
+            if limits.max_cost_usd is not None and total_cost > limits.max_cost_usd:
+                retry_after = max(1.0, bucket_exp - now)
+                return ReserveResult(
+                    allowed=False,
+                    exceeded_limit="cost",
+                    current_value=counters.cost_usd + reserved_cost,
+                    limit_value=limits.max_cost_usd,
+                    retry_after_s=retry_after,
+                )
+
+            if (
+                limits.max_compute_seconds is not None
+                and counters.compute_seconds >= limits.max_compute_seconds
+            ):
+                retry_after = max(1.0, bucket_exp - now)
+                return ReserveResult(
+                    allowed=False,
+                    exceeded_limit="compute",
+                    current_value=counters.compute_seconds,
+                    limit_value=limits.max_compute_seconds,
+                    retry_after_s=retry_after,
+                )
+
+            # All checks pass: save reservation, increment requests & sliding window
+            filtered_ts.append(now)
+            pipe = self.r.pipeline(transaction=True)
+            pipe.delete(rpm_key)
+            if filtered_ts:
+                pipe.rpush(rpm_key, *[str(t) for t in filtered_ts])
+                pipe.expire(rpm_key, 120)
+
+            pipe.hincrby(min_key, "requests", 1)
+            pipe.expireat(min_key, int(min_exp))
+            if key != min_key:
+                pipe.hincrby(key, "requests", 1)
+                pipe.expireat(key, int(bucket_exp))
+
+            res_key = self._k("res", request_id)
+            pipe.hset(
+                res_key,
+                mapping={
+                    "identity": identity,
+                    "window": window,
+                    "bucket": bucket,
+                    "tokens": str(tokens),
+                    "cost_usd": str(cost_usd),
+                    "created_at": str(now),
+                },
+            )
+            pipe.expire(res_key, 600)
+
+            # Update active reservations list
+            valid_res_ids.append(request_id)
+            pipe.delete(active_res_key)
+            if valid_res_ids:
+                pipe.rpush(active_res_key, *valid_res_ids)
+                pipe.expire(active_res_key, 660)
+
+            await pipe.execute()
+            return ReserveResult(allowed=True)
+        finally:
+            await self._release_lock(identity)
+
+    async def settle(
+        self,
+        request_id: str,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost_usd: float = 0.0,
+        compute_seconds: float = 0.0,
+    ) -> bool:
+        res_key = self._k("res", request_id)
+        raw = await self.r.hgetall(res_key)
+        if not raw:
+            return False
+        d = {_s(k): _s(v) for k, v in raw.items()}
+        identity = d.get("identity")
+        bucket = d.get("bucket")
+        if not identity or not bucket:
+            await self.r.delete(res_key)
+            return False
+
+        pipe = self.r.pipeline(transaction=True)
+        pipe.delete(res_key)
+        usage_key = self._k("usage", identity, bucket)
+        pipe.hincrby(usage_key, "prompt_tokens", prompt_tokens)
+        pipe.hincrby(usage_key, "completion_tokens", completion_tokens)
+        pipe.hincrbyfloat(usage_key, "cost_usd", cost_usd)
+        pipe.hincrbyfloat(usage_key, "compute_seconds", compute_seconds)
+        await pipe.execute()
+        return True
 
     async def all_usage(self) -> dict[tuple[str, str], UsageCounters]:
         out: dict[tuple[str, str], UsageCounters] = {}

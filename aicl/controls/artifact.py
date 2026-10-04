@@ -35,6 +35,8 @@ import zipfile
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import anyio
+
 from aicl import feeds
 from aicl.models import Action, Decision, Match, RequestContext, Stage
 from aicl.registry import register_control
@@ -133,48 +135,78 @@ def _index(arg: Any) -> int:
 
 def scan_pickle(data: bytes, scan: Scan, where: str = "") -> None:
     """Walk the opcodes with a minimal stack model: only strings matter, everything else is
-    an opaque item. Dangerous globals found before a parse error still count (§7.1)."""
+    an opaque item. Dangerous globals found before a parse error still count (§7.1).
+    Handles concatenated pickles by continuing across STOP opcodes."""
     stack: list[Any] = []
     memo: dict[int, Any] = {}
-    try:
-        for op, arg, _pos in pickletools.genops(data):
-            name = op.name
-            if name in _STRING_OPS:
-                stack.append(arg.decode("latin-1") if isinstance(arg, bytes) else str(arg))
-            elif name in _PUT_OPS:
-                memo[_index(arg)] = stack[-1] if stack else None
-            elif name == "MEMOIZE":
-                memo[len(memo)] = stack[-1] if stack else None
-            elif name in _GET_OPS:
-                stack.append(memo.get(_index(arg)))
-            elif name == "MARK":
-                stack.append(_MARK)
-            elif name == "POP":
-                if stack:
-                    stack.pop()
-            elif name == "POP_MARK":
-                while stack and stack.pop() is not _MARK:
-                    pass
-            elif name == "DUP":
-                stack.append(stack[-1] if stack else None)
-            elif name in ("GLOBAL", "INST"):
-                module, _, attr = str(arg).replace("\n", " ").partition(" ")
-                _judge_global(module, attr, scan, where)
-                stack.append(None)
-            elif name == "STACK_GLOBAL":
-                attr_item = stack.pop() if stack else None
-                module_item = stack.pop() if stack else None
-                if isinstance(module_item, str) and isinstance(attr_item, str):
-                    _judge_global(module_item, attr_item, scan, where)
+    pos_offset = 0
+
+    while pos_offset < len(data):
+        current_data = data[pos_offset:]
+        last_stop_pos = -1
+        had_op = False
+        try:
+            for op, arg, pos in pickletools.genops(current_data):
+                had_op = True
+                name = op.name
+                if name in _STRING_OPS:
+                    stack.append(arg.decode("latin-1") if isinstance(arg, bytes) else str(arg))
+                elif name in _PUT_OPS:
+                    memo[_index(arg)] = stack[-1] if stack else None
+                elif name == "MEMOIZE":
+                    memo[len(memo)] = stack[-1] if stack else None
+                elif name in _GET_OPS:
+                    stack.append(memo.get(_index(arg)))
+                elif name == "MARK":
+                    stack.append(_MARK)
+                elif name == "POP":
+                    if stack:
+                        stack.pop()
+                elif name == "POP_MARK":
+                    while stack and stack.pop() is not _MARK:
+                        pass
+                elif name == "DUP":
+                    stack.append(stack[-1] if stack else None)
+                elif name in ("GLOBAL", "INST"):
+                    module, _, attr = str(arg).replace("\n", " ").partition(" ")
+                    _judge_global(module, attr, scan, where)
+                    stack.append(None)
+                elif name == "STACK_GLOBAL":
+                    attr_item = stack.pop() if stack else None
+                    module_item = stack.pop() if stack else None
+                    if isinstance(module_item, str) and isinstance(attr_item, str):
+                        _judge_global(module_item, attr_item, scan, where)
+                    else:
+                        scan.add(
+                            "warn", "unresolved_global", f"{where or 'pickle'}: STACK_GLOBAL operands unknown"
+                        )
+                    stack.append(None)
+                elif name == "STOP":
+                    last_stop_pos = pos
+                    break
                 else:
-                    scan.add(
-                        "warn", "unresolved_global", f"{where or 'pickle'}: STACK_GLOBAL operands unknown"
-                    )
-                stack.append(None)
-            elif name != "STOP":
-                stack.append(None)  # any other result: opaque, not a string
-    except Exception as exc:  # noqa: BLE001 - corrupted streams raise many exception types
-        scan.unparseable("unparseable_pickle", f"{where or 'pickle'}: stream broken ({type(exc).__name__})")
+                    stack.append(None)  # any other result: opaque, not a string
+
+            if last_stop_pos != -1:
+                next_offset = pos_offset + last_stop_pos + 1
+                if next_offset == pos_offset:
+                    break
+                pos_offset = next_offset
+            else:
+                if pos_offset == 0:
+                    if had_op:
+                        scan.unparseable("unparseable_pickle", f"{where or 'pickle'}: stream ended without STOP")
+                else:
+                    scan.add("warn", "trailing_data", f"{where or 'pickle'}: trailing unparseable data after STOP")
+                break
+        except Exception as exc:  # noqa: BLE001 - corrupted streams raise many exception types
+            if pos_offset == 0:
+                scan.unparseable("unparseable_pickle", f"{where or 'pickle'}: stream broken ({type(exc).__name__})")
+            else:
+                scan.add(
+                    "warn", "trailing_data", f"{where or 'pickle'}: trailing unparseable data ({type(exc).__name__})"
+                )
+            break
 
 
 def _parses_as_pickle(data: bytes) -> bool:
@@ -418,14 +450,22 @@ class ArtifactScanControl:
         filename = ""
         if ctx.segments:
             filename = str(ctx.segments[0].meta.get("filename") or ctx.segments[0].text)
-        scan = scan_artifact(
-            ctx.artifact or b"",
-            filename,
-            dangerous_feed=dangerous,
-            bad_hashes=bad_hashes,
-            reject_unparseable=bool(_cfg_val(cfg, "reject_unparseable", True)),
-            max_entries=int(_cfg_val(cfg, "max_archive_entries", 2000)),
-            max_unpacked=int(_cfg_val(cfg, "max_unpacked_bytes", 512 * 1024 * 1024)),
+
+        raw_artifact = ctx.artifact or b""
+        reject_unparseable = bool(_cfg_val(cfg, "reject_unparseable", True))
+        max_entries = int(_cfg_val(cfg, "max_archive_entries", 2000))
+        max_unpacked = int(_cfg_val(cfg, "max_unpacked_bytes", 512 * 1024 * 1024))
+
+        scan = await anyio.to_thread.run_sync(
+            lambda: scan_artifact(
+                raw_artifact,
+                filename,
+                dangerous_feed=dangerous,
+                bad_hashes=bad_hashes,
+                reject_unparseable=reject_unparseable,
+                max_entries=max_entries,
+                max_unpacked=max_unpacked,
+            )
         )
 
         blocking = [f for f in scan.findings if f.level == "block"]

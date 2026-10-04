@@ -1,6 +1,7 @@
 # `docker compose up`                       -> gateway :8080 + mock LLM + mock tools
 # `docker compose run --rm tests`           -> pełny suite w kontenerze (§11.8)
 # `docker compose --profile ollama up`      -> dodatkowo prawdziwy Ollama
+# `docker compose --profile hybrid up`      -> profil hybrydowy (Ollama + modele bge-m3 i qwen2.5)
 # `docker compose --profile bastion up`     -> dodatkowo klasyfikator Bastion (:8090, backend: remote)
 #  Podpięcie obu: docs/SEMANTIC_SETUP.md
 # `AICL_EXTRAS=test,protectai,redis docker compose build` -> obraz z ProtectAI (ONNX) i klientem Redis
@@ -18,13 +19,13 @@ services:
   mock-llm:
     <<: *app
     command: uvicorn tests.mocks.mock_llm:app --host 0.0.0.0 --port 9001
-    ports: ["9001:9001"]
+    ports: ["127.0.0.1:9001:9001"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9001/healthz')"], interval: 5s, retries: 10}
 
   mock-tools:
     <<: *app
     command: uvicorn tests.mocks.mock_tools:app --host 0.0.0.0 --port 9002
-    ports: ["9002:9002"]
+    ports: ["127.0.0.1:9002:9002"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9002/healthz')"], interval: 5s, retries: 10}
 
   gateway:
@@ -44,8 +45,8 @@ services:
       - ./policies:/app/policies
       - ./feeds:/app/feeds
       - ./data:/app/data
-      - hf-cache:/root/.cache/huggingface  # ProtectAI model downloaded once, kept between runs
-    ports: ["8080:8080"]
+      - hf-cache:/home/aicl/.cache/huggingface  # ProtectAI model downloaded once, kept between runs
+    ports: ["127.0.0.1:8080:8080"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"], interval: 5s, retries: 20}
     depends_on:
       mock-llm: {condition: service_healthy}
@@ -62,18 +63,25 @@ services:
     # Bastion Prompt Protection microservice (AGPL-3.0, free English model): POST /protect
     image: ghcr.io/bastion-soft/bastion-prompt-protection:latest
     profiles: [bastion]
-    ports: ["8090:8080"]                # 8080 is the gateway
+    ports: ["127.0.0.1:8090:8080"]                # 8080 is the gateway
 
   ollama:
     image: ollama/ollama:latest
-    profiles: [ollama]
-    ports: ["11434:11434"]
+    profiles: [ollama, hybrid]
+    ports: ["127.0.0.1:11434:11434"]
     volumes: ["ollama:/root/.ollama"]
+
+  ollama-init:
+    image: ollama/ollama:latest
+    profiles: [hybrid]
+    depends_on:
+      ollama: {condition: service_started}
+    entrypoint: ["sh", "-c", "sleep 3 && ollama pull --host http://ollama:11434 qwen2.5:1.5b && ollama pull --host http://ollama:11434 bge-m3 || true"]
 
   redis:
     image: redis:7-alpine
     profiles: [redis]
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
 
 volumes:
   ollama: {}

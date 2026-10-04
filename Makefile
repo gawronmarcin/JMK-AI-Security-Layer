@@ -1,17 +1,24 @@
 # Cele z ARCHITECTURE.md §10. Jedna komenda dla jury: `make test` (§11.8).
-PY      ?= python3
-VENV    ?= .venv
-BIN     := $(VENV)/bin
+ifeq ($(OS),Windows_NT)
+    PY      ?= python
+    VENV    ?= .venv
+    BIN     := $(VENV)/Scripts
+else
+    PY      ?= python3
+    VENV    ?= .venv
+    BIN     := $(VENV)/bin
+endif
+
 PYTEST  := $(BIN)/pytest
 
 .PHONY: install test test-live test-fast check-semantic fuzz report mocks dev demo lint clean
 
-$(BIN)/activate:
+$(BIN)/pip:
 	$(PY) -m venv $(VENV)
 	$(BIN)/pip install -q --upgrade pip
 	$(BIN)/pip install -q -e ".[test,dev]"
 
-install: $(BIN)/activate
+install: $(BIN)/pip
 
 test: install                       ## pełny suite: bez Ollamy, bez internetu
 	$(PYTEST) -q
