@@ -201,11 +201,12 @@ controls:
       languages: [en]
       other_languages: skip             # skip | escalate | classify
       corroborate: true
+      corroborate_untrusted: true
       corroborate_min_risk: 0.30
     levels:
-      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25, other_languages: escalate, corroborate: false}
-      balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30}
-      permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40}
+      strict:     {action: block, threshold_block: 0.70, threshold_grey: 0.25, other_languages: escalate, corroborate: false, corroborate_untrusted: false}
+      balanced:   {action: block, threshold_block: 0.80, threshold_grey: 0.30, corroborate_untrusted: true}
+      permissive: {action: flag,  threshold_block: 0.90, threshold_grey: 0.40, corroborate_untrusted: true}
     
   pii_input:
     id: C-PII-IN

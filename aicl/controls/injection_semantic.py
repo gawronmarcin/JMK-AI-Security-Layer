@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from aicl.controls.pii_secrets import PII_DETECTORS, SECRET_DETECTORS, _scan
 from aicl.models import Action, Decision, Match, Origin, RequestContext, Segment, Severity, Stage
 from aicl.registry import register_control
 from aicl.semantic.ollama import Judge, JudgeError, Verdict
@@ -43,6 +44,7 @@ def configure(settings: SemanticSettings, judge: Judge | None = None, rng: rando
         judge = OllamaJudge(
             settings.base_url, settings.model,
             timeout_ms=settings.timeout_ms, max_input_chars=settings.max_input_chars,
+            max_windows=settings.max_windows,
         )
     _STATE.settings, _STATE.judge = settings, judge
     if rng is not None:
@@ -96,11 +98,39 @@ def _cfg(cfg: Any, key: str, default: Any) -> Any:
     return default if v is None else v
 
 
+def mask_secrets_and_pii(text: str) -> str:
+    """Mask PII and secrets before passing text to the semantic judge to avoid false positives."""
+    all_detectors = [d for group in PII_DETECTORS.values() for d in group] + [
+        d for group in SECRET_DETECTORS.values() for d in group
+    ]
+    spans: list[tuple[int, int, str]] = []
+    for det, start, end, _ in _scan(text, all_detectors):
+        spans.append((start, end, f"<{det.kind.upper()}>"))
+    if not spans:
+        return text
+
+    spans.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+    merged: list[tuple[int, int, str]] = []
+    last_end = 0
+    for start, end, placeholder in spans:
+        if start < last_end:
+            continue
+        merged.append((start, end, placeholder))
+        last_end = end
+
+    chars = list(text)
+    for start, end, placeholder in reversed(merged):
+        chars[start:end] = list(placeholder)
+    return "".join(chars)
+
+
 def _judge_text(seg: Segment) -> str:
-    """Judge the original text, plus any decoded (base64/hex/...) fragments so encoded attacks are seen."""
+    """Judge the original text, plus any decoded fragments, with PII and secrets masked."""
+    masked_text = mask_secrets_and_pii(seg.text)
     if not seg.decoded:
-        return seg.text
-    return seg.text + "\n[decoded fragments]\n" + "\n".join(seg.decoded)
+        return masked_text
+    masked_decoded = [mask_secrets_and_pii(d) for d in seg.decoded]
+    return masked_text + "\n[decoded fragments]\n" + "\n".join(masked_decoded)
 
 
 def _skipped(reason: str) -> Decision:

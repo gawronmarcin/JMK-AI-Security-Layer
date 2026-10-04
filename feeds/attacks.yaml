@@ -199,7 +199,7 @@ signatures:
   - id: SIG-INJ-013
     set: injection
     kind: regex
-    pattern: '(?i)(<\|?(?:system|im_start|im_end|endoftext|assistant)\|?>|\[/?inst\]|<<\s*sys\s*>>|(?:^|\W)###\s*(?:system|instruction)\b)'
+    pattern: '(?i)(<\|?(?:system|im_start|im_end|endoftext|assistant)\|?>|\[/?inst\]|<<\s*sys\s*>>|(?:^|\n)###\s*(?:system|instruction)\s*[:\n])'
     severity: high
     description: "Fake chat-template delimiters smuggled into user content"
     refs: ["OWASP LLM01:2025", "AML.T0051.000"]

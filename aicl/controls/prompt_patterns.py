@@ -110,6 +110,8 @@ class InjectionPatternsControl:
         risk_weights = {"low": 0.2, "medium": 0.5, "high": 0.8, "critical": 1.0}
         min_severity_val = severity_map.get(min_severity_cfg, 1)
 
+        matched_sig_records: list[tuple[Signature, bool, str]] = []
+
         for segment in ctx.segments:
             # Only scan untrusted input / external sources
             if segment.origin not in (Origin.user, Origin.tool_result, Origin.retrieved, Origin.artifact):
@@ -137,6 +139,7 @@ class InjectionPatternsControl:
                         in_decoded=False,
                     ))
                     match_found = True
+                    matched_sig_records.append((sig, False, ""))
 
                 # Search decoded views (base64, hex, url, etc.)
                 for decoded_text in segment.decoded:
@@ -148,6 +151,8 @@ class InjectionPatternsControl:
                             in_decoded=True,
                         ))
                         match_found = True
+                        codec = segment.meta.get("decoded_codecs", {}).get(decoded_text, "")
+                        matched_sig_records.append((sig, True, codec))
 
                 if match_found:
                     matched_origins.add(segment.origin)
@@ -155,6 +160,12 @@ class InjectionPatternsControl:
                     highest_severity_val = max(highest_severity_val, sig_sev_val)
 
         final_risk = min(accumulated_risk, 1.0) if matches else 0.0
+
+        # B1: If decoding budget was exceeded on any segment, escalate risk into grey zone (>= 0.15)
+        # without blocking on its own so downstream tiers/telemetry inspect it.
+        has_decode_truncated = any(s.meta.get("decode_truncated") for s in ctx.segments)
+        if has_decode_truncated:
+            final_risk = max(final_risk, 0.20)
 
         final_action = Action.allow
         severity_str: Severity = "low"
@@ -174,11 +185,34 @@ class InjectionPatternsControl:
         else:
             final_threats = cfg_threats
 
+        # B3: Build informative reason (up to 3 matched signatures + descriptions + codec)
+        if matched_sig_records:
+            unique_descs: list[str] = []
+            seen_keys: set[tuple[str, bool, str]] = set()
+            for sig, in_dec, codec in matched_sig_records:
+                key = (sig.id, in_dec, codec)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                item = f'matched {sig.id} "{sig.description}"'
+                if in_dec:
+                    item += f" (decoded: {codec})" if codec else " (decoded)"
+                unique_descs.append(item)
+            top3 = unique_descs[:3]
+            reason_str = "; ".join(top3)
+            if len(unique_descs) > 3:
+                reason_str += f"; +{len(unique_descs) - 3} more"
+        elif has_decode_truncated:
+            reason_str = "decode budget truncated: potential obfuscation detected"
+        else:
+            reason_str = "no injection patterns detected"
+
         return Decision(
             control_id=self.id,
             threat_ids=final_threats,
             action=final_action,
             severity=severity_str,
             risk=final_risk,
+            reason=reason_str,
             matches=matches,
         )

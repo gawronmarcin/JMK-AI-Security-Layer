@@ -24,6 +24,7 @@ class SemanticSettings:
     sample_rate: float = 0.0                 # share of remaining requests judged anyway
     max_input_chars: int = 4000
     max_segments: int = 3                    # cap judge calls per request (latency guard)
+    max_windows: int = 3                     # evaluate up to N windows for long untrusted docs
 
     @property
     def model_ready(self) -> bool:
@@ -46,4 +47,5 @@ class SemanticSettings:
             sample_rate=min(1.0, max(0.0, float(run_when.get("sample_rate", 0.0)))),
             max_input_chars=int(sem.get("max_input_chars", 4000)),
             max_segments=int(sem.get("max_segments", 3)),
+            max_windows=int(sem.get("max_windows", 3)),
         )

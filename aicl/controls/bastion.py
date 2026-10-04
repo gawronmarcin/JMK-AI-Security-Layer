@@ -26,6 +26,7 @@ Without a backend, or while the model is loading, the control reports `skipped`.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +40,17 @@ CONTROL_ID = "C-INJ-BASTION"
 THREATS = ["TH-01", "TH-02"]
 CLASSIFIED_ORIGINS = {Origin.user, Origin.tool_result, Origin.retrieved, Origin.artifact}
 ESCALATE_RISK = 0.5  # inside the default semantic.run_when.risk_between [0.15, 0.85]
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_JSON_SYNTAX_RE = re.compile(r"[{}\[\]]|\"(?:[a-zA-Z0-9_\-]+)\":")
+_WS_RE = re.compile(r"\s+")
+
+
+def clean_for_classifier(text: str) -> str:
+    """Strip HTML/XML markup and JSON structural syntax so the model classifies natural text."""
+    t = _HTML_TAG_RE.sub(" ", text)
+    t = _JSON_SYNTAX_RE.sub(" ", t)
+    return _WS_RE.sub(" ", t).strip()
 
 
 @dataclass
@@ -76,7 +88,10 @@ def status() -> dict[str, Any]:
 
 
 def _cfg(cfg: Any, key: str, default: Any) -> Any:
-    v = cfg.get(key) if isinstance(cfg, Mapping) or hasattr(cfg, "get") else None
+    if isinstance(cfg, Mapping) or hasattr(cfg, "get"):
+        v = cfg.get(key)
+    else:
+        v = getattr(cfg, key, None)
     return default if v is None else v
 
 
@@ -109,10 +124,31 @@ class BastionControl:
 
         segments = [s for s in ctx.segments if s.origin in CLASSIFIED_ORIGINS and s.text.strip()]
         s = st.settings
-        work = texts_for(segments, s.max_chars, s.max_chunks, s.max_texts)
-        if not work:
+        raw_work = texts_for(segments, s.max_chars, s.max_chunks, s.max_texts)
+        if not raw_work:
             return _decision(Action.allow, "no user or untrusted text to classify", skipped=True,
                              threat_ids=threat_ids)
+
+        work: list[tuple[Segment, str]] = []
+        for seg, t in raw_work:
+            cleaned = clean_for_classifier(t)
+            is_untrusted = seg.trust == "untrusted" or seg.origin in (
+                Origin.tool_result, Origin.retrieved, Origin.artifact
+            )
+            # Normal tool outputs often contain trivial json/status with few letters; skip if < 20 letters
+            if is_untrusted and sum(c.isalpha() for c in cleaned) < 20:
+                continue
+            if not cleaned.strip():
+                continue
+            work.append((seg, cleaned))
+
+        if not work:
+            return _decision(
+                Action.allow,
+                "no text with sufficient content to classify",
+                skipped=True,
+                threat_ids=threat_ids,
+            )
 
         languages = list(_cfg(cfg, "languages", ["en"]))
         other_languages = str(_cfg(cfg, "other_languages", "skip"))
@@ -142,6 +178,7 @@ class BastionControl:
         threshold_block = float(_cfg(cfg, "threshold_block", 0.80))
         threshold_grey = float(_cfg(cfg, "threshold_grey", 0.30))
         corroborate = bool(_cfg(cfg, "corroborate", False))
+        corroborate_untrusted = bool(_cfg(cfg, "corroborate_untrusted", False))
         min_risk = float(_cfg(cfg, "corroborate_min_risk", 0.30))
         own = [(seg, sc) for seg, sc, nat in scored if nat]
         other = [(seg, sc) for seg, sc, nat in scored if not nat]
@@ -154,10 +191,13 @@ class BastionControl:
                              threat_ids=threat_ids, severity="medium", score=risk, risk=ESCALATE_RISK)
 
         if own and risk >= threshold_block:
-            # corroboration is for the user's own messages, where the model's false positives are
-            # ("disregard my last email"); in untrusted content (tool output, documents) an
-            # instruction aimed at the model is itself the attack (ordinary documents scored ~0)
-            if corroborate and ctx.risk < min_risk and seg.trust != "untrusted":
+            # corroboration: for user messages (corroborate) and for untrusted tool/retrieved data (corroborate_untrusted).
+            # When corroboration is required and no earlier tier raised risk, escalate to judge instead of blocking.
+            needs_corroboration = (
+                (corroborate and seg.trust != "untrusted")
+                or (corroborate_untrusted and seg.trust == "untrusted" and risk < 0.85)
+            )
+            if needs_corroboration and ctx.risk < min_risk:
                 return escalate(f"risk {risk:.2f} but no earlier tier found the text suspicious")
             return _decision(
                 Action(_cfg(cfg, "action", "block")),

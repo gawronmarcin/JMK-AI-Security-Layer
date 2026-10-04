@@ -168,48 +168,109 @@ def _deleet(text: str) -> str | None:
     return out if out != text else None
 
 
-def _decode_once(text: str) -> list[str]:
-    out: list[str] = []
+def _despace(text: str) -> str | None:
+    """Collapses spaced single letters separated by space, dot, dash, or underscore.
+    Requires at least 4 single letters so abbreviations (U.S.A.) and short sequences are preserved.
+    """
+    out = text
+    # 1. Separators: dot, dash, underscore
+    for sep in (".", "-", "_"):
+        escaped_sep = re.escape(sep)
+        pattern = rf"(?<![A-Za-z0-9{escaped_sep}])([A-Za-z](?:{escaped_sep}[A-Za-z]){{3,}}){escaped_sep}?(?![A-Za-z0-9])"
+        out = re.sub(pattern, lambda m: m.group(1).replace(sep, ""), out)
+
+    # 2. Separators: space
+    # Check for sentence-level or multi-word spacing (words separated by >= 2 spaces)
+    def _despace_sentence(s: str) -> str:
+        parts = re.split(r"(\s{2,})", s)
+        new_parts: list[str] = []
+        for p in parts:
+            if re.match(r"^\s{2,}$", p):
+                new_parts.append(" ")
+            else:
+                m = re.fullmatch(r"([A-Za-z](?: [A-Za-z])*)(\W*)", p)
+                if m:
+                    letters = m.group(1).split(" ")
+                    if len(letters) >= 2:
+                        new_parts.append("".join(letters) + m.group(2))
+                    else:
+                        new_parts.append(p)
+                else:
+                    new_parts.append(p)
+        return "".join(new_parts)
+
+    candidate = _despace_sentence(out)
+    if len(candidate) <= len(out) - 3:
+        out = candidate
+    else:
+        # Fallback to token-level runs of >= 4 spaced letters
+        out = re.sub(
+            r"(?<![A-Za-z])([A-Za-z](?: [A-Za-z]){3,})(?![A-Za-z])",
+            lambda m: m.group(1).replace(" ", ""),
+            out,
+        )
+
+    return out if out != text else None
+
+
+def _decode_once(text: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
     for m in _B64_RE.finditer(text):
         if (s := _b64(m.group())) is not None:
-            out.append(s)
+            out.append((s, "base64"))
     for rx in (_HEX_RE, _HEX_ESC_RE):
         for m in rx.finditer(text):
             if (s := _hex(m.group())) is not None:
-                out.append(s)
+                out.append((s, "hex"))
     if len(_PCT_RE.findall(text)) >= 3:
         unq = unquote(text)
         if unq != text:
-            out.append(unq)
+            out.append((unq, "url"))
     if (s := _rot13(text)) is not None:
-        out.append(s)
+        out.append((s, "rot13"))
     if (s := _deleet(text)) is not None:
-        out.append(s)
+        out.append((s, "leet"))
+    if (s := _despace(text)) is not None:
+        out.append((s, "spaced"))
     return out
 
 
-def decode_fragments(text: str) -> list[str]:
+def decode_fragments(text: str, meta: dict[str, Any] | None = None) -> list[str]:
     """Bounded recursive decoding. Returns unique fragments different from the input."""
     results: list[str] = []
     seen = {text}
     budget = MAX_DECODED_BYTES
     frontier = [strip_invisible(text)]
+    truncated = False
+    methods: list[str] = meta.setdefault("decode_methods", []) if meta is not None else []
+    codecs_map: dict[str, str] = meta.setdefault("decoded_codecs", {}) if meta is not None else {}
+
     for _ in range(MAX_DECODE_DEPTH):
         next_frontier: list[str] = []
         for item in frontier:
-            for s in _decode_once(item):
+            candidates = _decode_once(item)
+            candidates.sort(key=lambda pair: len(pair[0].encode("utf-8")))
+            for s, codec in candidates:
                 if s in seen:
                     continue
-                size = len(s.encode())
+                size = len(s.encode("utf-8"))
                 if size > budget:
-                    return results
+                    truncated = True
+                    continue
                 budget -= size
                 seen.add(s)
                 results.append(s)
+                if codec not in methods:
+                    methods.append(codec)
+                codecs_map[s] = codec
                 next_frontier.append(s)
         frontier = next_frontier
         if not frontier:
             break
+
+    if truncated and meta is not None:
+        meta["decode_truncated"] = True
+
     return results
 
 
@@ -220,12 +281,14 @@ def build_segment(
     trust: Trust = "trusted",
     meta: dict[str, Any] | None = None,
 ) -> Segment:
+    m = dict(meta or {})
+    decoded = decode_fragments(text, meta=m)
     return Segment(
         idx=idx,
         text=text,
         norm=fold(text),
-        decoded=decode_fragments(text),
+        decoded=decoded,
         origin=origin,
         trust=trust,
-        meta=meta or {},
+        meta=m,
     )

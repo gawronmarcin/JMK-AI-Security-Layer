@@ -208,7 +208,8 @@ Backend wybiera się w polityce, `controls.injection_bastion.params.backend`:
 | parametr | znaczenie | balanced | strict |
 |---|---|---|---|
 | `languages: [en]` + `other_languages` | tekst nierozpoznany jako angielski (`aicl/semantic/lang.py`, 355/356 trafnie na korpusie i testach): `skip` = pomiń, zostaw embeddingom i sędziemu; `escalate` = tylko do sędziego; `classify` = oceniaj normalnie | `skip` | `escalate` |
-| `corroborate` | wysoki wynik na **wiadomości użytkownika** blokuje tylko, gdy wcześniejsza warstwa też uznała tekst za podejrzany (`ctx.risk >= corroborate_min_risk`, np. embeddingi „niepewne”); inaczej decyduje sędzia. Treść niezaufana (wynik narzędzia, dokument) jest blokowana na podstawie samego wyniku | `true` | `false` |
+| `corroborate` | wysoki wynik na **wiadomości użytkownika** blokuje tylko, gdy wcześniejsza warstwa też uznała tekst za podejrzany (`ctx.risk >= corroborate_min_risk`, np. embeddingi „niepewne”); inaczej decyduje sędzia | `true` | `false` |
+| `corroborate_untrusted` | wysoki wynik na **treści niezaufanej** (wynik narzędzia, dokument) w profilach balanced/permissive eskaluje do sędziego LLM zamiast blokować natychmiast, chyba że wcześniejsza warstwa podniosła ryzyko | `true` | `false` |
 
 Bez tych reguł (klasyfikator blokuje sam) test całego stosu dał 11 fałszywych alarmów na 24 zwykłe zdania; z nimi 0 (pkt 6).
 
@@ -256,7 +257,8 @@ Każdy serwis zgodny z kontraktem `POST /protect {"prompt": "..."}` → `{"risk"
 
 - oryginalny tekst segmentu,
 - jego postać znormalizowana, jeśli normalizacja usunęła zaciemnienie (pełna szerokość, homoglify, zero-width),
-- zdekodowane fragmenty (base64/hex/…).
+- zdekodowane fragmenty (base64/hex/…),
+- **oczyszczanie znaczników**: znaczniki HTML/XML oraz struktura JSON są usuwane przed klasyfikacją, a krótkie techniczne wyniki narzędzi (< 20 liter alfabetu) są pomijane, aby uniknąć fałszywych alarmów.
 
 Długie teksty są cięte na okna `max_chars` (domyślnie 2000 znaków, ~512 tokenów). Powyżej `max_chunks` zostają pierwsze okna i ostatnie, bo ataki często siedzą na końcu dokumentu. Limit wywołań na zapytanie to `max_texts` (16). Wszystkie trzy da się nadpisać w `params`.
 
