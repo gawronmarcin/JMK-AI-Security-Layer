@@ -103,3 +103,51 @@ async def test_audit_content_none_redaction(tmp_path):
     assert len(read_ev.decisions) == 1
     match = read_ev.decisions[0].matches[0]
     assert match.masked is None or match.masked == ""
+
+
+# --- the gateway applies these settings, at startup and on hot reload --------------------------
+
+def _gateway_app(tmp_path, overlay=None):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from policy_files import write_policy
+
+    from aicl.app import create_app
+
+    env = {"AICL_KEY_SUPPORT": "k-support", "AICL_KEY_RESEARCH": "k-research", "AICL_KEY_ADMIN": "k-admin"}
+    path = write_policy(tmp_path, overlay)
+    return create_app(path, env=env, base_dir=Path(__file__).parents[2], audit_path=tmp_path / "audit.jsonl",
+                      reload_interval=None), path
+
+
+def test_typo_in_control_id_is_rejected_at_startup(tmp_path):
+    with pytest.raises(PolicyError) as exc_info:
+        _gateway_app(tmp_path, {"controls": {"injection_patterns": {"id": "C-INJ-PATT"}}})
+    assert any("unknown control id 'C-INJ-PATT'" in e for e in exc_info.value.errors)
+
+
+def test_typo_in_control_id_is_rejected_on_reload(tmp_path):
+    app, path = _gateway_app(tmp_path)
+    rt = app.state.runtime
+    before = rt.policy.version
+    path.write_text(path.read_text(encoding="utf-8").replace("id: C-INJ-PAT", "id: C-INJ-PATT"), encoding="utf-8")
+    assert rt.reload_policy() is False
+    assert rt.policy.version == before
+
+
+def test_session_ttl_follows_the_policy_on_reload(tmp_path):
+    app, path = _gateway_app(tmp_path)
+    rt = app.state.runtime
+    assert rt.state.session_ttl == 3600
+    path.write_text(path.read_text(encoding="utf-8").replace("session_ttl_seconds: 3600", "session_ttl_seconds: 120"),
+                    encoding="utf-8")
+    assert rt.reload_policy() is True
+    assert rt.state.session_ttl == 120
+
+
+def test_audit_settings_apply_from_startup(tmp_path):
+    app, _ = _gateway_app(tmp_path, {"audit": {"content": "none", "max_file_bytes": 1234, "keep_files": 2}})
+    audit = app.state.runtime.audit
+    assert (audit.content_mode, audit.max_file_bytes, audit.keep_files) == ("none", 1234, 2)

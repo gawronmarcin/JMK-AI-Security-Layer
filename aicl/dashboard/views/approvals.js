@@ -172,7 +172,7 @@ export function createApprovals(ctx) {
       ? rawItems
       : rawItems.filter((i) => i.status === currentFilter);
 
-    table.setData(filtered);
+    table.setRows(filtered);
   }
 
   return {

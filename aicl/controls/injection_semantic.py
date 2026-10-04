@@ -11,6 +11,7 @@ Contract notes (ARCHITECTURE.md 4.1, 4.2, 7.1):
 from __future__ import annotations
 
 import asyncio
+import difflib
 import random
 import re
 from collections.abc import Mapping
@@ -124,13 +125,39 @@ def mask_secrets_and_pii(text: str) -> str:
     return "".join(chars)
 
 
+# ctx.risk set by C-INJ-BASTION when it held a block back for this judge (aicl/controls/bastion.py);
+# inside the default semantic.run_when.risk_between [0.15, 0.85]
+PENDING_BLOCK_RISK = 0.8
+
+_PLACEHOLDER_RE = re.compile(r"[ \t]*<[A-Z0-9_]+>")
+
+
+def strip_secrets_and_pii(text: str) -> str:
+    """PII and secrets cut out (not replaced by a `<AWS_ACCESS_KEY>` label): with the label a small
+    judge still reads "exfiltration of credentials" into a user simply sharing one, and the value
+    itself says nothing about injection. C-PII-IN / C-SECRET-IN handle the data."""
+    return _PLACEHOLDER_RE.sub("", mask_secrets_and_pii(text))
+
+
+def _new_decoded(text: str, fragment: str) -> bool:
+    """A decoded fragment worth showing the judge: mostly words, and not just the text itself
+    read another way (a leetspeak/normalized copy turns AKIA...7EXAMPLE into AKIA...tEXAMPLE,
+    which no secret detector strips, and looks to a small judge like a hidden payload)."""
+    if not fragment.strip():
+        return False
+    wordish = sum(ch.isalpha() or ch.isspace() for ch in fragment) / len(fragment)
+    if wordish < 0.7:
+        return False
+    return difflib.SequenceMatcher(None, text.casefold(), fragment.casefold()).quick_ratio() < 0.8
+
+
 def _judge_text(seg: Segment) -> str:
-    """Judge the original text, plus any decoded fragments, with PII and secrets masked."""
-    masked_text = mask_secrets_and_pii(seg.text)
-    if not seg.decoded:
-        return masked_text
-    masked_decoded = [mask_secrets_and_pii(d) for d in seg.decoded]
-    return masked_text + "\n[decoded fragments]\n" + "\n".join(masked_decoded)
+    """Judge the original text, plus decoded fragments that add something, PII and secrets cut out."""
+    text = strip_secrets_and_pii(seg.text)
+    decoded = [d for d in (strip_secrets_and_pii(f) for f in seg.decoded) if _new_decoded(text, d)]
+    if not decoded:
+        return text
+    return text + "\n[decoded fragments]\n" + "\n".join(decoded)
 
 
 def _skipped(reason: str) -> Decision:
@@ -167,6 +194,16 @@ class InjectionSemantic:
             elif isinstance(r, BaseException):
                 raise r  # cancellation / programming errors are not judge failures
         if not verdicts:
+            if ctx.risk >= PENDING_BLOCK_RISK:
+                # the classifier wanted to block and only waited for this judge: it was not
+                # cleared, so its verdict stands (on_error fail_open is for the judge's own view)
+                return Decision(
+                    control_id=self.id, threat_ids=["TH-01", "TH-02"],
+                    action=Action(_cfg(cfg, "action", "block")), severity="high",
+                    reason=f"semantic judge unavailable ({type(errors[0]).__name__}); "
+                           f"the classifier's block (risk {ctx.risk:.2f}) stands",
+                    risk=ctx.risk,
+                )
             raise errors[0]  # engine applies on_error (fail_open) and records it in the audit `error` field
 
         seg, best = max(verdicts, key=lambda p: p[1].score)

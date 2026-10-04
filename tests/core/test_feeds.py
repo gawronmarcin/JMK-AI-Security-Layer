@@ -125,10 +125,10 @@ def test_empty_policy_drops_last_good_on_failure(store, tmp_path):
     assert store.current() is EMPTY
 
 
-def test_url_feeds_report_unsupported(tmp_path, events):
+def test_unreachable_url_feed_is_rejected(tmp_path, events):
     s = FeedStore(base_dir=tmp_path, on_event=lambda d, e: events.append((d, e)))
-    s.configure([FeedRef(name="remote", url="https://feeds.example/attacks.yaml")])
-    assert s.current() is EMPTY and "not supported" in events[-1][1]
+    s.configure([FeedRef(name="remote", url="https://feeds.invalid/attacks.yaml")], force=True)  # RFC 2606
+    assert s.current() is EMPTY and "cannot read feed" in events[-1][1]
 
 
 def test_configure_only_reloads_changed_feeds(store, events, tmp_path):

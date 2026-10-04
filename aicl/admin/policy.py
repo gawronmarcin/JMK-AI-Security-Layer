@@ -46,7 +46,7 @@ def router(rt: Runtime) -> APIRouter:
             return denied
         source = (await request.body()).decode("utf-8", errors="replace")
         try:
-            candidate = parse_policy(source, rt.env)
+            candidate = parse_policy(source, rt.env, known_controls=rt.known_control_ids())
         except PolicyError as exc:
             return JSONResponse({"valid": False, "errors": exc.errors}, status_code=400)
         return JSONResponse(
@@ -77,7 +77,7 @@ def router(rt: Runtime) -> APIRouter:
             pass
 
         try:
-            candidate = parse_policy(source, rt.env)
+            candidate = parse_policy(source, rt.env, known_controls=rt.known_control_ids())
         except PolicyError as exc:
             return JSONResponse({"valid": False, "errors": exc.errors}, status_code=400)
 

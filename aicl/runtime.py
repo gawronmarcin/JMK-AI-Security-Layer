@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aicl import registry
 from aicl.approvals import ApprovalStore
 from aicl.audit import AuditWriter, new_event
 from aicl.engine import missing_controls
@@ -62,12 +63,18 @@ class Runtime:
     # Outcome of the latest load/reload attempt, for /admin/policy: {at, result, reason, error}.
     last_reload: dict[str, str | None] = field(default_factory=dict)
 
+    def known_control_ids(self) -> set[str] | None:
+        """Control ids a policy may name (unknown id = invalid policy); None = not checked (a
+        runtime built with its own control set, as in tests)."""
+        return set(registry.all_controls()) if self.controls is None else None
+
     async def start(self) -> None:
         await self.audit.start()
         await self.upstream.start()
         self.feeds.env = self.env
         self.feeds.on_event = self._feed_event
-        self.feeds.configure(self.policy.raw.signature_feeds, force=True)
+        # remote feeds are fetched over the network: not on the event loop
+        await asyncio.to_thread(self.feeds.configure, self.policy.raw.signature_feeds, force=True)
         listener_errors = self._notify(self.policy)
         self._emit_reloaded(self.policy, {"reason": "startup"}, listener_errors)
         self._record_reload("reloaded", "startup")
@@ -98,7 +105,7 @@ class Runtime:
             return False
         try:
             source = self.policy_path.read_text(encoding="utf-8")
-            new = parse_policy(source, self.env)
+            new = parse_policy(source, self.env, known_controls=self.known_control_ids())
         except (OSError, PolicyError) as exc:
             errors = (
                 exc.errors if isinstance(exc, PolicyError) else [f"cannot read policy: {type(exc).__name__}"]
@@ -120,8 +127,8 @@ class Runtime:
 
         old = self.policy
         self.policy = new  # atomic swap: one attribute assignment
-        if hasattr(self.state, "session_ttl_seconds"):
-            self.state.session_ttl_seconds = float(new.raw.taint.session_ttl_seconds)
+        if hasattr(self.state, "session_ttl"):  # InMemoryStore / RedisStore
+            self.state.session_ttl = type(self.state.session_ttl)(new.raw.taint.session_ttl_seconds)
         self.audit.content_mode = new.raw.audit.content
         if hasattr(self.audit, "max_file_bytes"):
             self.audit.max_file_bytes = new.raw.audit.max_file_bytes
@@ -157,7 +164,7 @@ class Runtime:
             await asyncio.sleep(interval)
             try:
                 self.check_files()
-                self.feeds.poll_remote()
+                await asyncio.to_thread(self.feeds.poll_remote)
             except Exception:
                 log.exception("hot reload check failed")
 

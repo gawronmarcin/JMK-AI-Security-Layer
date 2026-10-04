@@ -137,3 +137,70 @@ def test_remote_feed_ssrf_protection():
     meta = store.feed_metadata()["ssrf_feed"]
     assert meta["status"] == "rejected"
     assert "insecure or untrusted" in meta["last_error"]
+
+
+# --- hardening: url parsing, redirects, malformed responses -------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:@evil.example/feed.yaml",       # userinfo trick: the host is evil.example
+    "http://user:pw@127.0.0.1/feed.yaml",             # credentials in the url
+    "http://127.0.0.1.evil.example/feed.yaml",        # prefix-match trick
+    "ftp://127.0.0.1/feed.yaml",
+])
+def test_remote_feed_url_tricks_are_refused(url):
+    store = FeedStore()
+    store.configure([FeedRef(name="f", url=url)], force=True)
+    meta = store.feed_metadata()["f"]
+    assert meta["status"] == "rejected"
+
+
+class _OddServer(BaseHTTPRequestHandler):
+    mode = "redirect"
+
+    def do_GET(self):  # noqa: N802
+        if self.mode == "redirect":
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", "http://169.254.169.254/latest/meta-data")
+            self.end_headers()
+        elif self.mode == "bad_length":
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", "abc")
+            self.end_headers()
+        elif self.mode == "not_utf8":
+            body = b"feed_version: '1'\nsignatures: []\n\xff\xfe"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.mode == "chunked_huge":
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            chunk = b"#" * 65536
+            for _ in range(100):  # 6.5 MB, no content-length
+                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+
+    def log_message(self, format, *args):
+        pass
+
+
+@pytest.mark.parametrize("mode,error", [
+    ("redirect", "HTTP 302"),
+    ("bad_length", "cannot read feed"),        # httpx refuses the header itself: still a clean rejection
+    ("not_utf8", "not UTF-8"),
+    ("chunked_huge", "maximum size"),
+])
+def test_malformed_remote_feed_is_rejected_not_crashing(mode, error):
+    _OddServer.mode = mode
+    _OddServer.protocol_version = "HTTP/1.1" if mode == "chunked_huge" else "HTTP/1.0"
+    server = HTTPServer(("127.0.0.1", 0), _OddServer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        store = FeedStore()
+        store.configure([FeedRef(name="f", url=f"http://127.0.0.1:{server.server_port}/feed.yaml")], force=True)
+        meta = store.feed_metadata()["f"]
+        assert meta["status"] == "rejected" and error in meta["last_error"]
+    finally:
+        server.shutdown()
+        server.server_close()

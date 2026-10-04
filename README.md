@@ -150,7 +150,8 @@ make lint          # Weryfikacja jakości kodu (ruff)
 # Uruchomienie bramki z mockami LLM i narzędzi:
 docker compose up
 
-# Uruchomienie pełnego stosu hybrydowego (bramka + Ollama z bge-m3 i qwen2.5):
+# Uruchomienie pełnego stosu hybrydowego: dodatkowo bramka z warstwami AI na :8081
+# (policies/hybrid.yaml: embeddingi bge-m3, ProtectAI ONNX, sędzia qwen2.5:1.5b; modele pobierane przy 1. starcie):
 docker compose --profile hybrid up
 
 # Uruchomienie pełnego suite testów w kontenerze:

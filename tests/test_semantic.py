@@ -238,6 +238,24 @@ async def test_partial_failure_still_uses_successful_verdicts():
     assert d.action == Action.block and d.matches[0].segment_idx == 1
 
 
+@pytest.mark.asyncio
+async def test_judge_down_keeps_a_classifier_block_that_waited_for_it():
+    """C-INJ-BASTION held a block back for corroboration (ctx.risk = PENDING_BLOCK_RISK): if the
+    judge cannot answer, that block stands instead of on_error fail_open letting the text through."""
+    configure(FakeJudge({"doc": JudgeUnavailable("timeout")}))
+    s = seg(0, "doc", Origin.tool_result, "untrusted")
+    d = await sem.InjectionSemantic().evaluate(ctx(s, risk=sem.PENDING_BLOCK_RISK, stage=Stage.tool_result), BALANCED)
+    assert d.action == Action.block and "stands" in d.reason
+
+
+@pytest.mark.asyncio
+async def test_judge_down_without_a_pending_block_still_fails_per_on_error():
+    configure(FakeJudge({"doc": JudgeUnavailable("timeout")}))
+    s = seg(0, "doc", Origin.tool_result, "untrusted")
+    with pytest.raises(JudgeUnavailable):
+        await sem.InjectionSemantic().evaluate(ctx(s, risk=0.5, stage=Stage.tool_result), BALANCED)
+
+
 # ------------------------------------------------------------------ live (real Ollama; excluded from default run)
 
 @pytest.mark.live

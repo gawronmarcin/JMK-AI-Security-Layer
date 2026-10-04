@@ -150,3 +150,38 @@ controls:
             assert "retry-after" in sample_429.headers
             retry_val = int(sample_429.headers["retry-after"])
             assert retry_val > 0
+
+
+# --- Redis budget lock: owner token, frozen clock, contention ----------------------------------
+
+async def test_redis_lock_release_does_not_delete_someone_elses_lock():
+    from fake_redis import Data, FakeAsyncRedis
+
+    from aicl.state.redis_store import RedisStore
+
+    store = RedisStore(FakeAsyncRedis(Data()))
+    token = await store._acquire_lock("alice")
+    assert token is not None
+    lock_key = store._k("lock", "budget", "alice")
+    await store.r.set(lock_key, "someone-else")  # ours expired and another instance took it
+    await store._release_lock("alice", token)
+    assert await store.r.get(lock_key) == "someone-else"
+
+
+async def test_redis_lock_times_out_even_with_a_frozen_clock():
+    from fake_redis import Data, FakeAsyncRedis
+
+    from aicl.state.base import BudgetLimits
+    from aicl.state.redis_store import RedisStore
+
+    store = RedisStore(FakeAsyncRedis(Data()), clock=lambda: 1000.0)
+    await store.r.set(store._k("lock", "budget", "bob"), "held", nx=True, ex=10)
+    store_timeout = store._acquire_lock
+
+    async def quick(identity, timeout=5.0):
+        return await store_timeout(identity, timeout=0.05)
+
+    store._acquire_lock = quick
+    res = await store.check_and_reserve("bob", "day", "req-1", tokens=1, cost_usd=0.0,
+                                        limits=BudgetLimits(max_requests_per_minute=10))
+    assert not res.allowed and res.exceeded_limit == "busy" and res.retry_after_s == 1.0

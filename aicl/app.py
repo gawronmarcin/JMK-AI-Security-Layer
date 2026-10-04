@@ -84,10 +84,10 @@ def create_app(
     policy_path = Path(policy_path or env.get("AICL_POLICY") or DEFAULT_POLICY)
     if not policy_path.is_absolute():
         policy_path = base / policy_path
-    policy = load_policy_file(policy_path, env)
-
     if controls is None:
         registry.discover()
+    # a typo in a control id is an error, not a silently missing control
+    policy = load_policy_file(policy_path, env, known_controls=registry.all_controls() if controls is None else None)
     audit_file = Path(audit_path) if audit_path is not None else base / policy.raw.audit.path
     feeds.store.base_dir = base
 
@@ -99,7 +99,13 @@ def create_app(
         policy=policy,
         env=env,
         state=state,
-        audit=AuditWriter(audit_file, policy.raw.audit.max_event_bytes),
+        audit=AuditWriter(
+            audit_file,
+            policy.raw.audit.max_event_bytes,
+            content_mode=policy.raw.audit.content,
+            max_file_bytes=policy.raw.audit.max_file_bytes,
+            keep_files=policy.raw.audit.keep_files,
+        ),
         upstream=UpstreamClient(env, transport=upstream_transport, tool_transport=tool_transport),
         feeds=feeds.store,
         controls=controls,

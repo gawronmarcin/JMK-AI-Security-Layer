@@ -31,6 +31,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+# A block held back only for corroboration sets ctx.risk to PENDING_BLOCK_RISK: inside the judge's
+# grey zone, and if the judge then cannot answer, C-INJ-SEM lets this verdict stand (no fail-open).
+from aicl.controls.injection_semantic import PENDING_BLOCK_RISK
 from aicl.models import Action, Decision, Match, Origin, RequestContext, Segment, Severity, Stage
 from aicl.registry import register_control
 from aicl.semantic.classifier import Classifier, ClassifierError, ClassifierSettings, Score, build, texts_for
@@ -41,16 +44,43 @@ THREATS = ["TH-01", "TH-02"]
 CLASSIFIED_ORIGINS = {Origin.user, Origin.tool_result, Origin.retrieved, Origin.artifact}
 ESCALATE_RISK = 0.5  # inside the default semantic.run_when.risk_between [0.15, 0.85]
 
+_HTML_COMMENT_RE = re.compile(r"<!--(.*?)(?:-->|$)", re.S)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_ATTR_VALUE_RE = re.compile(r"=\s*(?:\"([^\"]*)\"|'([^']*)')")
 _JSON_SYNTAX_RE = re.compile(r"[{}\[\]]|\"(?:[a-zA-Z0-9_\-]+)\":")
 _WS_RE = re.compile(r"\s+")
 
 
+def _tag_text(m: re.Match[str]) -> str:
+    """A tag keeps its prose attribute values (alt, title, aria-label...): hidden-text carriers."""
+    values = [a or b for a, b in _ATTR_VALUE_RE.findall(m.group(0))]
+    return " " + " ".join(v for v in values if len(v.split()) >= 2) + " "
+
+
 def clean_for_classifier(text: str) -> str:
-    """Strip HTML/XML markup and JSON structural syntax so the model classifies natural text."""
-    t = _HTML_TAG_RE.sub(" ", text)
+    """Strip HTML/XML markup and JSON structural syntax so the model classifies natural text.
+
+    Only the markup goes: the text of HTML comments and prose in attributes stays, since that is
+    exactly where indirect injections hide (`<!-- AI assistant: ignore the user ... -->`).
+    """
+    t = _HTML_COMMENT_RE.sub(lambda m: f" {m.group(1)} ", text)
+    t = _HTML_TAG_RE.sub(_tag_text, t)
     t = _JSON_SYNTAX_RE.sub(" ", t)
     return _WS_RE.sub(" ", t).strip()
+
+
+_WORD_RE = re.compile(r"[^\W\d_]{2,}")
+PROSE_MIN_WORDS = 12
+PROSE_MIN_WORD_SHARE = 0.6
+
+
+def is_prose(cleaned: str) -> bool:
+    """Natural-language text (sentences of words), as opposed to terse machine output: shell
+    listings, status JSON, a page title. The classifier is trained on prose; on terse output its
+    0.9-1.0 scores are mostly false positives, while injections in documents are prose."""
+    tokens = cleaned.split()
+    words = [t for t in tokens if _WORD_RE.fullmatch(t.strip(".,;:!?()\"'"))]
+    return len(words) >= PROSE_MIN_WORDS and len(words) >= PROSE_MIN_WORD_SHARE * len(tokens)
 
 
 @dataclass
@@ -193,12 +223,21 @@ class BastionControl:
         if own and risk >= threshold_block:
             # corroboration: for user messages (corroborate) and for untrusted tool/retrieved data (corroborate_untrusted).
             # When corroboration is required and no earlier tier raised risk, escalate to judge instead of blocking.
+            # Untrusted content: prose (where indirect injections live) blocks on the score; terse
+            # machine output (shell/JSON/status), where the model's 0.9-1.0 false positives are,
+            # needs an earlier tier to agree, otherwise the judge (which always sees untrusted
+            # text) decides. No score cap: the false positives score as high as real attacks.
             needs_corroboration = (
                 (corroborate and seg.trust != "untrusted")
-                or (corroborate_untrusted and seg.trust == "untrusted" and risk < 0.85)
+                or (corroborate_untrusted and seg.trust == "untrusted" and not is_prose(clean_for_classifier(seg.text)))
             )
             if needs_corroboration and ctx.risk < min_risk:
-                return escalate(f"risk {risk:.2f} but no earlier tier found the text suspicious")
+                return _decision(
+                    Action.allow,
+                    f"classifier ({clf.name}): risk {risk:.2f} but no earlier tier found the text suspicious, "
+                    "escalated to the semantic judge (blocks if the judge is unavailable)",
+                    threat_ids=threat_ids, severity="medium", score=risk, risk=PENDING_BLOCK_RISK,
+                )
             return _decision(
                 Action(_cfg(cfg, "action", "block")),
                 f"classifier ({clf.name}): prompt injection, risk {risk:.2f} >= {threshold_block:.2f}",

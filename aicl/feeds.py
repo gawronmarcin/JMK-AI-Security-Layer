@@ -24,6 +24,7 @@ import hmac
 import logging
 import os
 import re
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -193,6 +194,50 @@ class FeedMeta:
     last_error: str | None = None
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _check_feed_url(url: str) -> None:
+    """https anywhere, plain http only to this machine. Parsed, not prefix-matched:
+    `http://localhost:@evil.example/` has host evil.example (and credentials) and is refused."""
+    parts = urllib.parse.urlsplit(url)
+    try:
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        host = ""
+    if parts.username is not None or parts.password is not None:
+        raise FeedError(["credentials in a remote feed url are not allowed"])
+    if host and (parts.scheme == "https" or (parts.scheme == "http" and host in _LOCAL_HOSTS)):
+        return
+    raise FeedError(["insecure or untrusted remote feed url: only https or localhost/127.0.0.1 allowed"])
+
+
+def _fetch_feed(url: str, headers: Mapping[str, str]) -> tuple[bytes, httpx.Headers] | None:
+    """GET a remote feed: None on 304, else (body, headers). Redirects are not followed (the
+    target would skip the url check); the size limit holds for chunked bodies too. Blocking:
+    the runtime calls it from a worker thread."""
+    with httpx.Client(timeout=10.0, follow_redirects=False) as client:
+        with client.stream("GET", url, headers=dict(headers)) as resp:
+            if resp.status_code == 304:
+                return None
+            if resp.status_code != 200:
+                raise FeedError([f"remote feed server returned HTTP {resp.status_code}"])
+            declared = resp.headers.get("content-length")
+            if declared is not None:
+                try:
+                    too_big = int(declared) > MAX_FEED_BYTES
+                except ValueError as exc:
+                    raise FeedError(["remote feed sent an invalid content-length"]) from exc
+                if too_big:
+                    raise FeedError([f"remote feed exceeds maximum size of 5MB ({declared} bytes)"])
+            body = bytearray()
+            for chunk in resp.iter_bytes():
+                body += chunk
+                if len(body) > MAX_FEED_BYTES:
+                    raise FeedError(["remote feed exceeds maximum size of 5MB"])
+            return bytes(body), resp.headers
+
+
 class FeedStore:
     def __init__(
         self,
@@ -243,6 +288,11 @@ class FeedStore:
             self._last_poll.pop(name, None)
         self._refs = new
         for name in changed:
+            if new[name].url is not None and not force:
+                # remote feed changed by a policy reload: fetched by the next poll_remote (off the
+                # event loop); the last good version stays active until then
+                self._last_poll[name] = 0.0
+                continue
             self._good.pop(name, None)
             self._load(name)
         self._rebuild()
@@ -266,10 +316,9 @@ class FeedStore:
                 last_time = self._last_poll.get(name, 0.0)
                 if (now - last_time) >= ref.refresh_seconds:
                     self._last_poll[name] = now
-                    old_ver = self._good.get(name).feed_version if name in self._good else None
+                    old = self._good.get(name)
                     self._load(name)
-                    new_ver = self._good.get(name).feed_version if name in self._good else None
-                    if old_ver != new_ver:
+                    if self._good.get(name) is not old:  # new content, even without a version bump
                         reloaded.append(name)
         if reloaded:
             self._rebuild()
@@ -304,58 +353,25 @@ class FeedStore:
         try:
             if is_remote:
                 url = ref.url or ""
-                if "feeds.example" in url:
-                    raise FeedError(["remote (url) feeds from feeds.example are not supported yet"])
-                # Protocol validation (SSRF / transport security)
-                is_safe_url = (
-                    url.startswith("https://")
-                    or url.startswith("http://localhost:")
-                    or url.startswith("http://localhost/")
-                    or url == "http://localhost"
-                    or url.startswith("http://127.0.0.1:")
-                    or url.startswith("http://127.0.0.1/")
-                    or url == "http://127.0.0.1"
-                    or url.startswith("http://[::1]:")
-                    or url.startswith("http://[::1]/")
-                )
-                if not is_safe_url:
-                    raise FeedError(["insecure or untrusted remote feed url: only https or localhost/127.0.0.1 allowed"])
-
+                _check_feed_url(url)
                 headers: dict[str, str] = {}
                 if meta.etag:
                     headers["if-none-match"] = meta.etag
                 if meta.last_modified:
                     headers["if-modified-since"] = meta.last_modified
 
-                with httpx.Client(timeout=10.0, follow_redirects=True) as client:
-                    resp = client.get(url, headers=headers)
-
+                fetched = _fetch_feed(url, headers)
                 meta.last_fetched_at = utc_now_iso()
 
-                if resp.status_code == 304:
-                    # Not modified, keep last good version
+                if fetched is None:  # 304: keep the last good version; reported once, not every poll
+                    if meta.status != "not_modified":
+                        self._emit({"feed": name, "status": "not_modified",
+                                    "feed_version": self._good.get(name).feed_version if name in self._good else None},
+                                   None)
                     meta.status = "not_modified"
                     meta.last_error = None
-                    self._emit(
-                        {
-                            "feed": name,
-                            "status": "not_modified",
-                            "feed_version": self._good.get(name).feed_version if name in self._good else None,
-                        },
-                        None,
-                    )
                     return
-
-                if resp.status_code != 200:
-                    raise FeedError([f"remote feed server returned HTTP {resp.status_code}"])
-
-                content_len = resp.headers.get("content-length")
-                if content_len and int(content_len) > MAX_FEED_BYTES:
-                    raise FeedError([f"remote feed exceeds maximum size of 5MB ({content_len} bytes)"])
-
-                body_bytes = resp.content
-                if len(body_bytes) > MAX_FEED_BYTES:
-                    raise FeedError(["remote feed exceeds maximum size of 5MB"])
+                body_bytes, resp_headers = fetched
 
                 if ref.signing_key_env:
                     env_dict = self.env if self.env is not None else os.environ
@@ -363,14 +379,17 @@ class FeedStore:
                     if not signing_key:
                         raise FeedError([f"signing key env {ref.signing_key_env} is not set"])
                     expected_sig = hmac.new(signing_key.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
-                    provided_sig = resp.headers.get("x-aicl-feed-signature", "").strip()
+                    provided_sig = resp_headers.get("x-aicl-feed-signature", "").strip()
                     if not provided_sig or not hmac.compare_digest(provided_sig.lower(), expected_sig.lower()):
                         raise FeedError(["HMAC signature verification failed for remote feed"])
 
-                feed_text = body_bytes.decode("utf-8")
+                try:
+                    feed_text = body_bytes.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise FeedError(["remote feed is not UTF-8 text"]) from exc
                 feed = parse_feed(feed_text)
-                meta.etag = resp.headers.get("etag")
-                meta.last_modified = resp.headers.get("last-modified")
+                meta.etag = resp_headers.get("etag")
+                meta.last_modified = resp_headers.get("last-modified")
 
             else:
                 assert ref.path is not None

@@ -51,3 +51,17 @@ async def test_dev_key_warning_audit(tmp_path):
     warning_ev = warnings[0]
     assert "identities using dev-key-*" in warning_ev.detail.get("warning", "")
     assert "support-agent-01" in warning_ev.detail.get("identities", [])
+
+
+def test_hybrid_policy_is_in_sync_with_default():
+    """hybrid.yaml is generated from default.yaml; a manual edit or a stale copy fails here."""
+    import importlib.util
+    from pathlib import Path
+
+    repo = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location("make_hybrid_policy", repo / "scripts" / "make_hybrid_policy.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    expected = mod.build((repo / "policies" / "default.yaml").read_text(encoding="utf-8"))
+    assert (repo / "policies" / "hybrid.yaml").read_text(encoding="utf-8") == expected, \
+        "run: python scripts/make_hybrid_policy.py"

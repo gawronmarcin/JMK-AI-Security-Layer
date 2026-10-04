@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 
 from aicl.state.base import (
@@ -29,6 +30,9 @@ from aicl.state.memory import MAX_TOOL_CALLS_KEPT
 PREFIX = "aicl"
 _INT_FIELDS = ("requests", "prompt_tokens", "completion_tokens")
 _FLOAT_FIELDS = ("cost_usd", "compute_seconds")
+
+
+_RELEASE_LOCK_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
 
 
 def _s(v: Any) -> str:
@@ -153,19 +157,28 @@ class RedisStore:
         *_, raw = await pipe.execute()
         return self._counters(raw)
 
-    async def _acquire_lock(self, identity: str, timeout: float = 5.0) -> bool:
+    async def _acquire_lock(self, identity: str, timeout: float = 5.0) -> str | None:
+        """Per-identity budget lock; returns the owner token, or None when not acquired in time.
+        The deadline is wall time (time.monotonic), not the injectable clock: a frozen test clock
+        must not make it spin forever."""
         lock_key = self._k("lock", "budget", identity)
-        deadline = self._clock() + timeout
-        while self._clock() < deadline:
-            res = await self.r.set(lock_key, "1", nx=True, ex=10)
-            if res:
-                return True
+        token = uuid.uuid4().hex
+        deadline = time.monotonic() + timeout
+        while True:
+            if await self.r.set(lock_key, token, nx=True, ex=10):
+                return token
+            if time.monotonic() >= deadline:
+                return None
             await asyncio.sleep(0.01)
-        return False
 
-    async def _release_lock(self, identity: str) -> None:
+    async def _release_lock(self, identity: str, token: str) -> None:
+        """Delete the lock only if this caller still owns it (it may have expired and been taken)."""
         lock_key = self._k("lock", "budget", identity)
-        await self.r.delete(lock_key)
+        try:
+            await self.r.eval(_RELEASE_LOCK_LUA, 1, lock_key, token)  # atomic compare-and-delete
+        except AttributeError:  # client without scripting (the in-memory test fake)
+            if _s(await self.r.get(lock_key) or "") == token:
+                await self.r.delete(lock_key)
 
     async def check_and_reserve(
         self,
@@ -178,7 +191,10 @@ class RedisStore:
         limits: BudgetLimits,
     ) -> ReserveResult:
         now = self._clock()
-        await self._acquire_lock(identity)
+        token = await self._acquire_lock(identity)
+        if token is None:
+            # cannot check the budget atomically: fail closed, the client retries shortly
+            return ReserveResult(allowed=False, exceeded_limit="busy", retry_after_s=1.0)
         try:
             # 1. Rate limit (sliding window of 60 seconds)
             rpm_key = self._k("rpm", identity)
@@ -301,7 +317,7 @@ class RedisStore:
             await pipe.execute()
             return ReserveResult(allowed=True)
         finally:
-            await self._release_lock(identity)
+            await self._release_lock(identity, token)
 
     async def settle(
         self,

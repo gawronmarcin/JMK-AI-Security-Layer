@@ -133,20 +133,31 @@ def _index(arg: Any) -> int:
     return arg if isinstance(arg, int) else int(str(arg))
 
 
+MAX_PICKLE_STREAMS = 10_000  # concatenated pickles in one blob; more is treated as unparseable
+
+
 def scan_pickle(data: bytes, scan: Scan, where: str = "") -> None:
     """Walk the opcodes with a minimal stack model: only strings matter, everything else is
     an opaque item. Dangerous globals found before a parse error still count (§7.1).
-    Handles concatenated pickles by continuing across STOP opcodes."""
+
+    Concatenated pickles (`pickle.load` in a loop runs every one of them) are walked one after
+    another on the same stream: linear time, no copy of the rest of the data per STOP.
+    """
     stack: list[Any] = []
     memo: dict[int, Any] = {}
-    pos_offset = 0
+    stream = io.BytesIO(data)
+    tag = where or "pickle"
 
-    while pos_offset < len(data):
-        current_data = data[pos_offset:]
-        last_stop_pos = -1
-        had_op = False
+    for n_stream in range(MAX_PICKLE_STREAMS + 1):
+        start = stream.tell()
+        if start >= len(data):
+            return
+        if n_stream == MAX_PICKLE_STREAMS:
+            scan.unparseable("unparseable_pickle", f"{tag}: more than {MAX_PICKLE_STREAMS} concatenated pickles")
+            return
+        stopped = had_op = False
         try:
-            for op, arg, pos in pickletools.genops(current_data):
+            for op, arg, _pos in pickletools.genops(stream):
                 had_op = True
                 name = op.name
                 if name in _STRING_OPS:
@@ -177,36 +188,25 @@ def scan_pickle(data: bytes, scan: Scan, where: str = "") -> None:
                     if isinstance(module_item, str) and isinstance(attr_item, str):
                         _judge_global(module_item, attr_item, scan, where)
                     else:
-                        scan.add(
-                            "warn", "unresolved_global", f"{where or 'pickle'}: STACK_GLOBAL operands unknown"
-                        )
+                        scan.add("warn", "unresolved_global", f"{tag}: STACK_GLOBAL operands unknown")
                     stack.append(None)
                 elif name == "STOP":
-                    last_stop_pos = pos
+                    stopped = True  # the stream is now just past the STOP opcode
                     break
                 else:
                     stack.append(None)  # any other result: opaque, not a string
-
-            if last_stop_pos != -1:
-                next_offset = pos_offset + last_stop_pos + 1
-                if next_offset == pos_offset:
-                    break
-                pos_offset = next_offset
-            else:
-                if pos_offset == 0:
-                    if had_op:
-                        scan.unparseable("unparseable_pickle", f"{where or 'pickle'}: stream ended without STOP")
-                else:
-                    scan.add("warn", "trailing_data", f"{where or 'pickle'}: trailing unparseable data after STOP")
-                break
         except Exception as exc:  # noqa: BLE001 - corrupted streams raise many exception types
-            if pos_offset == 0:
-                scan.unparseable("unparseable_pickle", f"{where or 'pickle'}: stream broken ({type(exc).__name__})")
+            if start == 0:
+                scan.unparseable("unparseable_pickle", f"{tag}: stream broken ({type(exc).__name__})")
             else:
-                scan.add(
-                    "warn", "trailing_data", f"{where or 'pickle'}: trailing unparseable data ({type(exc).__name__})"
-                )
-            break
+                scan.add("warn", "trailing_data", f"{tag}: trailing unparseable data ({type(exc).__name__})")
+            return
+        if not stopped:
+            if start == 0 and had_op:
+                scan.unparseable("unparseable_pickle", f"{tag}: stream ended without STOP")
+            elif start > 0:
+                scan.add("warn", "trailing_data", f"{tag}: trailing unparseable data after STOP")
+            return
 
 
 def _parses_as_pickle(data: bytes) -> bool:

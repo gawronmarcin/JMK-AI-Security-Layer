@@ -181,6 +181,15 @@ class BudgetGuard:
                     ),
                     retry_after_s=res.retry_after_s,
                 )
+            if res.exceeded_limit == "busy":
+                return Decision(
+                    control_id=self.id,
+                    threat_ids=["TH-12"],
+                    action=action,
+                    severity="medium",
+                    reason=f"Budget state busy for identity {ctx.identity!r}: retry shortly",
+                    retry_after_s=res.retry_after_s,
+                )
             return Decision(
                 control_id=self.id,
                 threat_ids=threat_ids,
