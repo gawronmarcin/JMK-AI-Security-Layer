@@ -104,6 +104,31 @@ def _valid_nip(raw: str) -> bool:
     return check == int(digits[9])
 
 
+def _valid_regon(raw: str) -> bool:
+    digits = re.sub(r"[ -]", "", raw)
+    if not digits.isdigit():
+        return False
+    if len(digits) == 9:
+        weights = (8, 9, 2, 3, 4, 5, 6, 7)
+        check = sum(int(d) * w for d, w in zip(digits[:8], weights)) % 11
+        if check == 10:
+            check = 0
+        return check == int(digits[8])
+    if len(digits) == 14:
+        weights9 = (8, 9, 2, 3, 4, 5, 6, 7)
+        check9 = sum(int(d) * w for d, w in zip(digits[:8], weights9)) % 11
+        if check9 == 10:
+            check9 = 0
+        if check9 != int(digits[8]):
+            return False
+        weights14 = (2, 4, 8, 5, 0, 9, 7, 3, 6, 1, 2, 4, 8)
+        check14 = sum(int(d) * w for d, w in zip(digits[:13], weights14)) % 11
+        if check14 == 10:
+            check14 = 0
+        return check14 == int(digits[13])
+    return False
+
+
 _PLACEHOLDER_WORDS = ("example", "your", "xxxx", "changeme", "placeholder", "redacted", "dummy")
 
 
@@ -208,6 +233,14 @@ PII_DETECTORS: dict[str, tuple[Detector, ...]] = {
             _c(r"(?<!\d)(?:\d{3}[ -]?\d{3}[ -]?\d{2}[ -]?\d{2}|\d{3}[ -]?\d{2}[ -]?\d{2}[ -]?\d{3}|\d{10})(?!\d)"),
             "high",
             validator=_valid_nip,
+        ),
+    ),
+    "regon": (
+        Detector(
+            "regon",
+            _c(r"(?<!\d)(?:\d{9}|\d{14})(?!\d)"),
+            "high",
+            validator=_valid_regon,
         ),
     ),
 }

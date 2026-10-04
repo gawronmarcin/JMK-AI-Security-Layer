@@ -8,6 +8,7 @@ import { createResources } from './resources.js';
 import { createScheduler, isStale } from './refresh.js';
 import { EVENT_FILTER_KEYS, VIEWS, buildHash, createStore, defaultFilters, parseHash } from './state.js';
 import { clear, el, fmtRelative, fmtTime } from './utils.js';
+import { createApprovals } from './views/approvals.js';
 import { createBudgets } from './views/budgets.js';
 import { createControls } from './views/controls.js';
 import { createEvents, eventDetails } from './views/events.js';
@@ -18,7 +19,7 @@ import { createPolicy } from './views/policy.js';
 import { createTests } from './views/tests.js';
 import { createThreats } from './views/threats.js';
 
-const TOPBAR_RES = ['health', 'policy'];
+const TOPBAR_RES = ['health', 'policy', 'approvals'];
 
 function readConfig() {
   const defaults = { apiBase: '', timeoutMs: 10000, eventsLimit: 2000, maxEventsInMemory: 10000, defaultRefreshMs: 5000, reports: { tests: null, fuzz: null } };
@@ -102,7 +103,7 @@ function main() {
     exportAudit,
   };
 
-  for (const make of [createOverview, createPlayground, createThreats, createControls, createBudgets, createPerformance, createTests, createEvents, createPolicy]) {
+  for (const make of [createOverview, createPlayground, createApprovals, createThreats, createControls, createBudgets, createPerformance, createTests, createEvents, createPolicy]) {
     const v = make(ctx);
     v.root.hidden = true;
     views[v.id] = v;

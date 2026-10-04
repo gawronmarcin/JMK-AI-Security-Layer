@@ -47,6 +47,7 @@ def kinds(decision):
     ("host 192.168.1.10 down", "ip_address"),
     ("dowod ABA300000 wydany", "id_card_pl"),
     ("NIP 123-456-78-19 firmy", "nip"),
+    ("REGON 123456785 spolki", "regon"),
 ])
 def test_pii_negative_detected(text, kind):                       # negative = must be caught
     d = run(PiiOutput, text)
@@ -62,6 +63,7 @@ def test_pii_negative_detected(text, kind):                       # negative = m
     "IBAN PL00 0000 0000 0000 0000 0000 0000",  # fails mod-97
     "dowod ABA300001 zly",                  # wrong id checksum
     "NIP 123-456-78-18 zly",                # wrong nip checksum
+    "REGON 123456786 zly",                  # wrong regon checksum
     "Please summarise the ticket for the customer.",
 ])
 def test_pii_positive_passes(text):                               # positive = must pass

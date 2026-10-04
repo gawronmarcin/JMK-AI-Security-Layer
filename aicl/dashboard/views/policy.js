@@ -39,11 +39,12 @@ export function createPolicy(ctx) {
   });
   histPanel.content.appendChild(histTable.root);
 
-  const ta = el('textarea', { class: 'yaml', rows: '14', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Candidate policy YAML', placeholder: 'Paste a candidate policy YAML here. It is sent to /admin/policy/validate only — never applied.' });
+  const ta = el('textarea', { class: 'yaml', rows: '14', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Candidate policy YAML', placeholder: 'Paste a candidate policy YAML here. Validate syntax or preview its impact against recent audit traffic.' });
   const validateBtn = el('button', { type: 'button', class: 'btn', text: 'Validate (does not apply)' });
+  const previewBtn = el('button', { type: 'button', class: 'btn btn-primary', text: 'Preview impact (Replay traffic)' });
   const valOut = el('div', { class: 'val-out', role: 'status', 'aria-live': 'polite' });
-  const valPanel = createPanel({ title: 'Validate candidate policy', desc: 'POST /admin/policy/validate with the YAML body. Returns field path + message for each error. Validation never activates the policy; to apply it, change the file on disk and reload.', span: 12 });
-  valPanel.content.append(el('p', { class: 'notice notice-info', text: 'Do not paste real API keys: identities reference keys via api_key_env, never inline values.' }), ta, el('div', { class: 'row-actions' }, validateBtn, el('span', { class: 'muted small', text: 'Max 512 KB' })), valOut);
+  const valPanel = createPanel({ title: 'Validate & preview candidate policy', desc: 'POST /admin/policy/validate checks syntax. POST /admin/policy/preview replays recorded requests and reports what outcomes would change before applying.', span: 12 });
+  valPanel.content.append(el('p', { class: 'notice notice-info', text: 'Do not paste real API keys: identities reference keys via api_key_env, never inline values.' }), ta, el('div', { class: 'row-actions' }, validateBtn, previewBtn, el('span', { class: 'muted small', text: 'Max 512 KB' })), valOut);
 
   const root = el('section', { class: 'view', 'aria-labelledby': 'v-policy' },
     viewHeader('Policy', 'Which policy is active and did the last policy / feed reload succeed?'),
@@ -98,6 +99,47 @@ export function createPolicy(ctx) {
         el('caption', { class: 'sr-only', text: 'Validation errors' }),
         el('thead', {}, el('tr', {}, el('th', { scope: 'col', text: 'Field path' }), el('th', { scope: 'col', text: 'Message' }))),
         el('tbody', {}, v.errors.map((e) => el('tr', {}, el('td', { class: 'mono', text: e.path || '(document)' }), el('td', { text: e.message }))))));
+    }
+  });
+
+  previewBtn.addEventListener('click', async () => {
+    const yaml = ta.value;
+    clear(valOut);
+    if (!yaml.trim()) { valOut.appendChild(el('p', { class: 'form-error', text: 'Paste a YAML document first.' })); return; }
+    previewBtn.disabled = true;
+    valOut.appendChild(el('p', { class: 'muted', text: 'Replaying recorded requests against candidate policy…' }));
+    try {
+      const res = await ctx.api.previewPolicy(yaml, 50);
+      clear(valOut);
+      const isDiff = (res.changed_count || 0) > 0;
+      valOut.appendChild(el('p', { class: `notice ${isDiff ? 'notice-warn' : 'notice-ok'}` },
+        el('span', { 'aria-hidden': 'true', text: isDiff ? '⚠ ' : '✓ ' }),
+        el('span', { text: `Replayed ${res.total_replayed} requests: ${res.changed_count} outcome change(s) detected. Candidate v${res.candidate_version}.` })
+      ));
+      if (res.diff && res.diff.length > 0) {
+        valOut.appendChild(el('table', { class: 'table table-compact' },
+          el('caption', { class: 'sr-only', text: 'Replay changes' }),
+          el('thead', {}, el('tr', {},
+            el('th', { scope: 'col', text: 'Request ID' }),
+            el('th', { scope: 'col', text: 'Endpoint' }),
+            el('th', { scope: 'col', text: 'Original action' }),
+            el('th', { scope: 'col', text: 'Candidate action' }),
+            el('th', { scope: 'col', text: 'Reasons' })
+          )),
+          el('tbody', {}, res.diff.map((d) => el('tr', {},
+            el('td', { class: 'mono', text: d.request_id }),
+            el('td', { text: d.endpoint }),
+            el('td', { text: d.original_action }),
+            el('td', { class: 'bold', text: d.candidate_action }),
+            el('td', { text: (d.reasons || []).join('; ') })
+          )))
+        ));
+      }
+    } catch (err) {
+      clear(valOut);
+      valOut.appendChild(el('p', { class: 'notice notice-error' }, el('span', { text: `Preview failed: ${err.message}` })));
+    } finally {
+      previewBtn.disabled = false;
     }
   });
 

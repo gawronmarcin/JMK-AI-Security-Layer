@@ -56,6 +56,14 @@ export function createResources(api, cfg) {
       abort: () => api.abort('controls'),
     },
     events: { load: loadEvents, minIntervalMs: 0, abort: () => api.abort('events') },
+    approvals: {
+      load: async () => {
+        const raw = await api.listApprovals('all');
+        return raw?.approvals || [];
+      },
+      minIntervalMs: 3000,
+      abort: () => api.abort('approvals'),
+    },
     // Policy/feed reload history over 7 days. /admin/events has no `type` filter (§5.1), so the
     // newest `eventsLimit` events are scanned and filtered here; truncation is reported.
     policyHistory: {

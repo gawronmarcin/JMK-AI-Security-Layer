@@ -6,15 +6,17 @@ check for a local demo (§5.1); never set it on a gateway reachable from outside
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from aicl.errors import GatewayError
 from aicl.flows.common import authenticate
 from aicl.models import ErrorType
 from aicl.policy.loader import PolicyError, parse_policy
+from aicl.policy.preview import preview_policy_change
 from aicl.runtime import Runtime
 
 ADMIN_ROLE = "admin"
@@ -50,6 +52,35 @@ def router(rt: Runtime) -> APIRouter:
         return JSONResponse(
             {"valid": True, "policy_version": candidate.version, "warnings": list(candidate.warnings)}
         )
+
+    @r.post("/preview")
+    async def preview(
+        request: Request,
+        last_n: int = Query(50, description="Number of recent request events to replay"),
+    ) -> JSONResponse:
+        """Body: candidate policy YAML or JSON with policy + last_n. Replays recorded requests; returns diff."""
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        if (denied := _require_admin(rt, headers)) is not None:
+            return denied
+        raw_body = (await request.body()).decode("utf-8", errors="replace")
+        limit = last_n
+        source = raw_body
+        try:
+            parsed_json = json.loads(raw_body)
+            if isinstance(parsed_json, dict) and "policy" in parsed_json:
+                source = str(parsed_json["policy"])
+                if "last_n" in parsed_json:
+                    limit = int(parsed_json["last_n"])
+        except ValueError:
+            pass
+
+        try:
+            candidate = parse_policy(source, rt.env)
+        except PolicyError as exc:
+            return JSONResponse({"valid": False, "errors": exc.errors}, status_code=400)
+
+        result = preview_policy_change(rt, candidate, limit=limit)
+        return JSONResponse(result)
 
     @r.post("/reload")
     async def reload(request: Request) -> JSONResponse:

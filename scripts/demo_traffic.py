@@ -364,6 +364,14 @@ def section_budget() -> None:
     record(s, "no 429 within 25 requests", r, (429, "block"))
 
 
+def section_hitl() -> None:
+    s = "hitl"
+    print("\n== Human-in-the-Loop (HITL): High-risk action approvals queue")
+    admin_h = {"Authorization": f"Bearer {KEYS['admin']}"}
+    r_list = client.get("/admin/approvals", headers=admin_h)
+    record(s, "admin lists pending approvals", r_list, (200, None))
+
+
 SECTIONS = {
     "clean": section_clean,
     "injection": section_injection,
@@ -371,6 +379,7 @@ SECTIONS = {
     "output": section_output,
     "access": section_access,
     "tools": section_tools,
+    "hitl": section_hitl,
     "artifacts": section_artifacts,
     "budget": section_budget,
 }

@@ -4,7 +4,7 @@ VENV    ?= .venv
 BIN     := $(VENV)/bin
 PYTEST  := $(BIN)/pytest
 
-.PHONY: install test test-live test-fast check-semantic fuzz report mocks dev lint clean
+.PHONY: install test test-live test-fast check-semantic fuzz report mocks dev demo lint clean
 
 $(BIN)/activate:
 	$(PY) -m venv $(VENV)
@@ -40,8 +40,11 @@ dev: install                        ## gateway lokalnie z auto-reloadem (wymaga 
 	set -a; [ -f .env ] && . ./.env; set +a; \
 	$(BIN)/uvicorn aicl.app:create_app --factory --reload --port 8080
 
+demo: install                       ## ruch demonstracyjny dla dashboardu i prezentacji
+	$(BIN)/python scripts/demo_traffic.py $(ARGS)
+
 lint: install
-	$(BIN)/ruff check tests
+	$(BIN)/ruff check aicl tests
 
 clean:
 	rm -rf reports/*.json reports/*.md .pytest_cache

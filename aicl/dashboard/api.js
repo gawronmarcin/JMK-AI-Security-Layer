@@ -152,6 +152,14 @@ export function createApi({ baseUrl = '', timeoutMs = 10000, onUnauthorized = ()
       request(key, '/admin/events', { query: { limit, since, action, control, identity } }),
     validatePolicy: (yamlText) =>
       request('policy.validate', '/admin/policy/validate', { method: 'POST', body: yamlText, contentType: 'application/yaml', timeout: 20000 }),
+    previewPolicy: (yamlText, lastN = 50) =>
+      request('policy.preview', `/admin/policy/preview?last_n=${lastN}`, { method: 'POST', body: yamlText, contentType: 'application/yaml', timeout: 30000 }),
+    listApprovals: (status = 'all') =>
+      request('approvals', `/admin/approvals?status=${status}`),
+    approveRequest: (approvalId) =>
+      request(`approve:${approvalId}`, `/admin/approvals/${approvalId}/approve`, { method: 'POST' }),
+    rejectRequest: (approvalId) =>
+      request(`reject:${approvalId}`, `/admin/approvals/${approvalId}/reject`, { method: 'POST' }),
     reloadPolicy: () => request('policy.reload', '/admin/policy/reload', { method: 'POST', timeout: 20000 }),
     exportAudit: () => request('export', '/admin/export/audit.jsonl', { raw: true, accept: 'application/x-ndjson, application/jsonl, text/plain, */*', timeout: 120000 }),
     chat: ({ model, prompt, identity = null, timeout = 30000 } = {}) => {

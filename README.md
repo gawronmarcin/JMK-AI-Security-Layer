@@ -89,6 +89,16 @@ Dla operacji o podwyższonym ryzyku (np. wywołanie uprzywilejowanego narzędzia
    - `POST /admin/approvals/{approval_id}/approve` – zatwierdzenie przez operatora
    - `POST /admin/approvals/{approval_id}/reject` – odrzucenie przez operatora
 3. **Ponowienie z tokenem**: Klient ponawia żądanie przekazując nagłówek `X-AICL-Approval-Id: <approval_id>`. Po weryfikacji zgody bramka bezpiecznie przepuszcza wykonanie (`HTTP 200`).
+4. **Interfejs Dashboardu**: Sekcja **Approvals** w panelu webowym umożliwia podgląd kolejki na żywo oraz zatwierdzanie/odrzucanie jednym kliknięciem.
+
+---
+
+## 🔄 Policy Preview & Replay (`POST /admin/policy/preview`)
+
+Przed wdrożeniem nowej wersji polityki na środowisko produkcyjne operator może przetestować kandydujący plik YAML na podstawie ostatnich żądań z logu audytowego:
+- **Endpoint**: `POST /admin/policy/preview?last_n=50` (przyjmuje treść YAML lub JSON `{"policy": "...", "last_n": 50}`).
+- **Wynik**: Raport różnicowy (*diff*) wskazujący, które żądania zmieniłyby swój status (np. `allow` ➔ `block` lub `block` ➔ `require_approval`), wraz z uzasadnieniem kontroli.
+- **Interfejs UI**: W zakładce **Policy** w panelu webowym przycisk **„Preview impact (Replay traffic)”** natychmiast generuje tabelę zmian dla wklejonego dokumentu YAML.
 
 ---
 
