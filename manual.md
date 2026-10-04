@@ -21,8 +21,9 @@ All keys below are development keys from `.env.example`. Default ports: gateway 
 ```bash
 docker compose up
 ```
+Master dashboard can be accessed at http://localhost:8080/dashboard
 
-Starts the gateway on http://localhost:8080 with a mock LLM, mock tool backends and a mock MCP server. The deterministic controls are active; the semantic judge talks to the mock, so the AI tiers are effectively off in this stack.
+The gateway is on http://localhost:8080 with a mock LLM, mock tool backends and a mock MCP server. The deterministic controls are active; the semantic judge talks to the mock, so the AI tiers are effectively off in this stack.
 
 ```bash
 docker compose run --rm tests
