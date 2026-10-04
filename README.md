@@ -23,7 +23,11 @@ Projekt stworzony na wyzwanie HackYeah *"AI Control Layer"*. Działa jako transp
    - Bezpieczna analiza wag modeli i plików pickle (`pickletools.genops`) – zero ryzyka wykonania kodu (`pickle.load`) przy skanowaniu.
 5. **Autonomiczny Fuzzer Mutacyjny**:
    - Wbudowane narzędzie atakujące (`tests/fuzz/`) testujące 14 strategii mutacyjnych (Base64, Hex, Leetspeak, Homoglyph, Zero-Width, HTML/Markdown smuggling, wielojęzyczność) osiągające **0.0% bypass rate**.
-6. **Lokalny Dashboard czasu rzeczywistego & Playground**:
+6. **Proxy MCP (Model Context Protocol)**:
+   - Bramka jest serwerem MCP dla agenta i klientem MCP dla serwera narzędzi (`POST /mcp/<serwer>`, Streamable HTTP, JSON-RPC 2.0). Agent zmienia tylko adres serwera MCP i dodaje klucz AICL.
+   - `tools/list`: domyślnie odmowa. Agent widzi tylko narzędzia zadeklarowane w polityce i dozwolone dla jego roli; opisy narzędzi są skanowane (*tool poisoning*), a zatrute narzędzie jest ukrywane.
+   - `tools/call` przechodzi przez ten sam potok co REST: skan argumentów, ACL, pętle, taint, HITL, skan wyniku i redakcja. Blokada wraca jako wynik `isError` z powodem, więc model agenta widzi, co się stało.
+7. **Lokalny Dashboard czasu rzeczywistego & Playground**:
    - Statyczny panel (Vanilla JS + Chart.js, zero zewnętrznych CDN) serwowany bezpośrednio z bramki. Obsługuje strumieniowanie zdarzeń SSE, podgląd telemetrii, eksport audytu JSONL, kolejkę Human-in-the-Loop, podgląd polityk (*Policy Preview*) oraz interaktywny **Playground** do testowania promptów ad-hoc z gotowymi presetami ataków hybrydowych.
 
 ---
@@ -46,7 +50,7 @@ Klient / Agent / Aplikacja
        │                              │                              │
        ▼                              ▼                              ▼
   Upstream LLM                   Backends Narzędzi              Lokalny Ollama
-(OpenAI-compat/mock)             (REST / MCP Tools)        (Sędzia LLM / Embeddingi)
+(OpenAI-compat/mock)        (REST / serwery MCP przez /mcp)  (Sędzia LLM / Embeddingi)
 ```
 
 ---
@@ -101,6 +105,35 @@ python scripts/check_semantic.py --skip-classifier
 # Uruchomienie testu całej kaskady na żywej bramce:
 python scripts/stack_test.py
 ```
+
+---
+
+## 🔌 Proxy MCP (`/mcp/<serwer>`)
+
+```
+Agent (dowolny klient MCP) ──MCP + Bearer <klucz AICL>──► AICL /mcp/docs ──MCP──► serwer MCP (mcp_servers.docs)
+```
+
+Konfiguracja w polityce (`policies/default.yaml`):
+```yaml
+mcp_servers:
+  docs: {url_env: AICL_MCP_DOCS_URL}      # opcjonalnie bearer_token_env: token wysyłany do serwera MCP
+tools:
+  docs.search:    {mcp_server: docs, privilege: low,  output_trust: untrusted}
+  docs.send_mail: {mcp_server: docs, privilege: high, output_trust: trusted}
+roles:
+  support_agent: {tools: [docs.search, docs.send_mail], ...}
+```
+
+| Metoda | Zachowanie bramki |
+|---|---|
+| `initialize` | odpowiada bramka; wydaje `Mcp-Session-Id` (sesja AICL związana z tożsamością) |
+| `tools/list` | lista z serwera → tylko narzędzia zadeklarowane jako `<serwer>.<narzędzie>` i dozwolone dla roli; opisy skanowane, zatrute ukrywane |
+| `tools/call` | pełny potok kontrolek (jak `/v1/tools/invoke`); blokada/zgoda/budżet → wynik `isError: true` z powodem i `_meta.aicl` |
+| `ping` | `{}` |
+| `resources/*`, `prompts/*`, inne | `-32601` (bramka przepuszcza wyłącznie narzędzia) |
+
+Zgody HITL działają jak w REST: ponów to samo wywołanie z nagłówkiem `X-AICL-Approval-Id`. Narzędzia MCP można też wołać przez REST (`/v1/tools/invoke` z `tool: docs.search`). Zgodność sprawdzona oficjalnym klientem MCP Python SDK (Streamable HTTP). Mock serwera do demo: `uvicorn tests.mocks.mock_mcp:app --port 9003` (w `docker compose up` startuje automatycznie). Ograniczenia: tylko transport HTTP (bez serwerów stdio); sesje do serwera MCP trzymane w pamięci instancji (po restarcie bramka sama nawiązuje nową).
 
 ---
 

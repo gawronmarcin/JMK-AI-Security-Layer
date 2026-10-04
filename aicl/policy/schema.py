@@ -70,13 +70,24 @@ class ModelSpec(_Strict):
 
 
 class ToolSpec(_Strict):
-    backend_url_env: str
+    # A tool is served either by an HTTP backend (`backend_url_env`, POST {tool, arguments}) or by
+    # an MCP server (`mcp_server`, tools/call); MCP tools are named "<server>.<tool name>".
+    backend_url_env: str | None = None
+    mcp_server: str | None = None
     privilege: Privilege = "low"
     output_trust: Trust = "untrusted"
     arg_schema: dict[str, Any] | None = None
     # Arguments that ARE the action (e.g. send_email `to`): still scanned (blocks, flags and the
     # audit apply) but never redacted, or the call would go to "[REDACTED:email]".
     no_redact_args: list[str] = Field(default_factory=list)
+
+
+class McpServerSpec(_Strict):
+    """An upstream MCP server (Streamable HTTP) proxied at /mcp/<name>."""
+
+    url_env: str  # env var with the server's MCP endpoint URL, e.g. http://localhost:9003/mcp
+    bearer_token_env: str | None = None  # env var with a token the gateway sends upstream
+    timeout_s: float = Field(default=30.0, gt=0)
 
 
 class BudgetSpec(_Strict):
@@ -192,6 +203,7 @@ class PolicyFile(_Strict):
     roles: dict[str, RoleSpec] = Field(default_factory=dict)
     models: list[ModelSpec] = Field(default_factory=list)
     tools: dict[str, ToolSpec] = Field(default_factory=dict)
+    mcp_servers: dict[str, McpServerSpec] = Field(default_factory=dict)
     budgets: dict[str, BudgetSpec] = Field(default_factory=dict)
     controls: dict[str, ControlSpec] = Field(default_factory=dict)
     semantic: SemanticSpec | None = None
@@ -207,6 +219,15 @@ class PolicyFile(_Strict):
         errors += _dupes("models", model_names)
         errors += _dupes("identities", [i.id for i in self.identities])
         errors += _dupes("controls (id)", [c.id for c in self.controls.values()])
+
+        for name, t in self.tools.items():
+            if (t.backend_url_env is None) == (t.mcp_server is None):
+                errors.append(f"tools.{name}: set exactly one of backend_url_env / mcp_server")
+            elif t.mcp_server is not None:
+                if t.mcp_server not in self.mcp_servers:
+                    errors.append(f"tools.{name}.mcp_server: unknown MCP server {t.mcp_server!r}")
+                elif not name.startswith(f"{t.mcp_server}."):
+                    errors.append(f"tools.{name}: an MCP tool is named '{t.mcp_server}.<tool name>'")
 
         for i in self.identities:
             if i.role not in self.roles:

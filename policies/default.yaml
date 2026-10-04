@@ -27,13 +27,13 @@ identities:
 roles:
   support_agent:
     models: [mock-commercial, ollama-local]
-    tools: [search_docs, send_email, delegate_task]
+    tools: [search_docs, send_email, delegate_task, docs.search, docs.send_mail, docs.helper]
     memory_namespaces: [kb_public]
     budget: support_default
     may_delegate_to: [researcher]
   researcher:
     models: [ollama-local]
-    tools: [search_docs, fetch_url, delegate_task]
+    tools: [search_docs, fetch_url, delegate_task, docs.search, docs.fetch_page]
     memory_namespaces: [kb_public, kb_research]
     budget: research_default
   admin:
@@ -77,11 +77,42 @@ tools:
     backend_url_env: AICL_TOOL_SHELL_URL
     privilege: critical
     output_trust: untrusted
+  docs.search:                          # MCP tools: "<server>.<tool name on that server>"
+    mcp_server: docs
+    privilege: low
+    output_trust: untrusted
+    arg_schema: {type: object, required: [query], properties: {query: {type: string, maxLength: 500}}}
+  docs.fetch_page:
+    mcp_server: docs
+    privilege: medium
+    output_trust: untrusted
+    arg_schema: {type: object, required: [url], properties: {url: {type: string, maxLength: 2000}}}
+  docs.send_mail:
+    mcp_server: docs
+    privilege: high
+    output_trust: trusted
+    arg_schema: {type: object, required: [to, subject, body]}
+    no_redact_args: [to]
+  docs.helper:                          # declared on purpose: its description is poisoned (demo)
+    mcp_server: docs
+    privilege: low
+    output_trust: untrusted
   delegate_task:
     backend_url_env: AICL_TOOL_DOCS_URL
     privilege: medium
     output_trust: trusted
     arg_schema: {type: object, properties: {role: {type: string}, task: {type: string}, depth: {type: integer}}}
+
+# --- MCP servers: proxied at /mcp/<name> (Streamable HTTP, JSON-RPC 2.0) ------------------------
+# An agent points its MCP client at http://<gateway>/mcp/docs with `Authorization: Bearer <AICL key>`.
+# Each upstream tool must be declared in `tools:` as "<server>.<tool>" with `mcp_server`: privilege,
+# output trust, argument schema and the role lists apply as for any tool. Undeclared tools are hidden
+# from tools/list and refused in tools/call (default deny); descriptions are scanned (tool poisoning).
+mcp_servers:
+  docs:
+    url_env: AICL_MCP_DOCS_URL          # e.g. http://localhost:9003/mcp (tests/mocks/mock_mcp.py)
+    # bearer_token_env: AICL_MCP_DOCS_TOKEN   # token the gateway sends to the upstream server
+    timeout_s: 30
 
 # --- Budgets (null/omitted limit = no limit) -------------------------------------------------
 budgets:

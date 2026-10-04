@@ -40,6 +40,7 @@ from aicl.flows.common import (
     RequestRecord,
     account_usage,
     apply_redacted_args,
+    description_leaves,
     extract_tool_arg_segments,
     fail_closed_redaction,
     keep_args,
@@ -80,7 +81,6 @@ class ChatRequest(BaseModel):
 _TEXT_KEYS = ("text", "refusal")  # content-part keys holding text, whatever the part `type`
 _DATA_URL_MIMES = ("text/", "application/json", "application/xml")
 MAX_DATA_URL_CHARS = 100_000
-_DESCRIPTION_KEYS = frozenset({"description", "title"})
 # Above this many characters the input segments are built in a worker thread (normalization
 # and decoding are CPU-bound and would stall every other request on the event loop).
 THREAD_SEGMENTS_CHARS = 20_000
@@ -167,14 +167,6 @@ def _call_arg_leaves(raw_args: Any) -> list[tuple[list[Any] | None, str]]:
     return [(path, text) for path, text in string_leaves(args)]
 
 
-def _description_leaves(value: Any, path: list[Any]) -> list[tuple[list[Any], str]]:
-    """`description` / `title` strings anywhere in a tool definition (JSON schema included)."""
-    return [
-        (path + p, text) for p, text in string_leaves(value)
-        if p and isinstance(p[-1], str) and p[-1] in _DESCRIPTION_KEYS
-    ]
-
-
 def _input_segments(req: ChatRequest, data: dict[str, Any]) -> tuple[list[Segment], list[Segment]]:
     """(message segments, every input segment): see the module docstring for the fields."""
     messages = []
@@ -209,7 +201,7 @@ def _input_segments(req: ChatRequest, data: dict[str, Any]) -> tuple[list[Segmen
     for key in ("tools", "functions"):
         defs = data.get(key)
         for k, tool in enumerate(defs if isinstance(defs, list) else []):
-            for path, desc in _description_leaves(tool, [key, k]):
+            for path, desc in description_leaves(tool, [key, k]):
                 extra.append((desc, Origin.tool_result, "trusted", {"field": "tool_definition", "data_path": path}))
 
     base = len(messages)

@@ -41,9 +41,10 @@ fuzz: install                       ## fuzzer mutacyjny -> reports/fuzz_*.json
 report:                             ## pokaż ostatni raport
 	@cat reports/test_report.md 2>/dev/null || echo "brak raportu — uruchom make test"
 
-mocks: install                      ## mocki jako osobne procesy dla R1/R2/R3 (porty 9001/9002)
+mocks: install                      ## mocki jako osobne procesy (LLM 9001, narzędzia 9002, serwer MCP 9003)
 	$(BIN)/uvicorn tests.mocks.mock_llm:app --port 9001 & \
 	$(BIN)/uvicorn tests.mocks.mock_tools:app --port 9002 & \
+	$(BIN)/uvicorn tests.mocks.mock_mcp:app --port 9003 & \
 	wait
 
 dev: install                        ## gateway lokalnie z auto-reloadem (wymaga aicl/ od R1)

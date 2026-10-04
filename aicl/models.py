@@ -55,7 +55,7 @@ class Origin(str, Enum):
 
 Trust = Literal["trusted", "untrusted"]
 Severity = Literal["low", "medium", "high", "critical"]
-Endpoint = Literal["chat", "tool_invoke", "artifact_scan"]
+Endpoint = Literal["chat", "tool_invoke", "mcp", "artifact_scan"]
 Profile = Literal["strict", "balanced", "permissive"]
 
 ACTION_PRECEDENCE: dict[Action, int] = {
