@@ -139,3 +139,44 @@ async def test_admin_policy_preview(tmp_path):
         assert entry_shadow["original_action"] == "allow"
         assert entry_shadow["candidate_action"] == "block"
         assert any("was shadow-suppressed previously, now enforced" in r for r in entry_shadow["reasons"])
+
+
+
+# --------------------------------------------------------------------------- C-TAINT replay
+
+
+def _tool_event(taint_action):
+    from aicl.models import AuditEvent
+
+    return AuditEvent(ts="2026-10-04T00:00:00Z", event_id="e1", type="request", request_id="r1",
+                      endpoint="tool_invoke", identity="support-agent-01", role="support_agent",
+                      final_action=taint_action,
+                      decisions=[AuditDecision(control_id="C-TAINT", threat_ids=["TH-19"], action=taint_action)])
+
+
+def _default_policy(**taint):
+    from pathlib import Path
+
+    import yaml
+
+    from aicl.policy.loader import parse_policy
+
+    raw = yaml.safe_load((Path(__file__).parents[2] / "policies" / "default.yaml").read_text(encoding="utf-8"))
+    raw["taint"].update(taint)
+    return parse_policy(yaml.safe_dump(raw))
+
+
+def test_allowed_tool_call_is_unchanged_under_the_same_policy():
+    from aicl.policy.preview import _evaluate_candidate
+
+    assert _evaluate_candidate(_tool_event(Action.allow), _default_policy()) == (Action.allow, [])
+
+
+def test_tainted_block_follows_candidate_taint_action():
+    from aicl.policy.preview import _evaluate_candidate
+
+    action, reasons = _evaluate_candidate(_tool_event(Action.block), _default_policy(action="require_approval"))
+    assert action == Action.require_approval
+    assert any("C-TAINT action changed from block to require_approval" in r for r in reasons)
+    action, reasons = _evaluate_candidate(_tool_event(Action.block), _default_policy(enabled=False))
+    assert action == Action.allow and any("disabled" in r for r in reasons)

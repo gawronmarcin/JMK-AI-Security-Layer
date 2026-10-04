@@ -426,3 +426,18 @@ async def test_ssrf_metadata_in_tool_arguments_is_blocked(tmp_path):
     assert err["control_id"] == "C-TOOL-ACL"
     assert "prohibited SSRF/metadata target" in err["message"]
 
+
+
+async def test_send_email_recipient_is_not_redacted_but_body_pii_is(gw):
+    """`no_redact_args: [to]` (policies/default.yaml): the recipient is the action itself."""
+    r = await gw.invoke(
+        "send_email",
+        {"to": "jan.kowalski@example.com", "subject": "Invoice",
+         "body": "Please call me at anna.nowak@example.com about it."},
+    )
+    assert r.status_code == 200
+    sent = gw.tool_calls[-1]["body"]["arguments"]
+    assert sent["to"] == "jan.kowalski@example.com"
+    assert "anna.nowak@example.com" not in sent["body"] and "[REDACTED:email]" in sent["body"]
+    e = await gw.request_event(r)
+    assert any(d.control_id == "C-PII-IN" and d.action == Action.redact for d in e.decisions)  # still audited

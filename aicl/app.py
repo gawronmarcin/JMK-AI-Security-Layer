@@ -93,10 +93,11 @@ def create_app(
 
     from aicl.state import set_store
 
+    state, approvals = _shared_state(env)
     rt = Runtime(
         policy=policy,
         env=env,
-        state=InMemoryStore(),
+        state=state,
         audit=AuditWriter(audit_file, policy.raw.audit.max_event_bytes),
         upstream=UpstreamClient(env, transport=upstream_transport, tool_transport=tool_transport),
         feeds=feeds.store,
@@ -104,7 +105,7 @@ def create_app(
         policy_path=policy_path,
         reload_interval=reload_interval,
         policy_listeners=[semantic_judge_listener(env), embedding_listener(env, base), classifier_listener(env)],
-        approvals=ApprovalStore(ttl_seconds=int(env.get("AICL_APPROVAL_TTL_SECONDS", DEFAULT_TTL_SECONDS))),
+        approvals=approvals,
     )
     set_store(rt.state)
 
@@ -169,6 +170,22 @@ class _RevalidatedStaticFiles(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+
+def _shared_state(env: Mapping[str, str]) -> tuple[Any, Any]:
+    """Budgets, sessions and HITL approvals: in this process by default; in Redis when
+    AICL_STATE_URL is set, so several gateway instances behind a load balancer share them."""
+    ttl = int(env.get("AICL_APPROVAL_TTL_SECONDS", DEFAULT_TTL_SECONDS))
+    url = env.get("AICL_STATE_URL")
+    if not url:
+        return InMemoryStore(), ApprovalStore(ttl_seconds=ttl)
+    try:
+        from aicl.approvals import RedisApprovalStore
+        from aicl.state.redis_store import RedisStore
+
+        return RedisStore.from_url(url), RedisApprovalStore.from_url(url, ttl_seconds=ttl)
+    except ImportError as exc:
+        raise RuntimeError('AICL_STATE_URL is set but the redis package is missing: pip install -e ".[redis]"') from exc
 
 
 def _body_reader(request: Request) -> BodyReader:

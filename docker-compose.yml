@@ -3,8 +3,15 @@
 # `docker compose --profile ollama up`      -> dodatkowo prawdziwy Ollama
 # `docker compose --profile bastion up`     -> dodatkowo klasyfikator Bastion (:8090, backend: remote)
 #  Podpięcie obu: docs/SEMANTIC_SETUP.md
+# `AICL_EXTRAS=test,protectai,redis docker compose build` -> obraz z ProtectAI (ONNX) i klientem Redis
+# `AICL_STATE_URL_OVERRIDE=redis://redis:6379/0 docker compose --profile redis up`
+#                                           -> wspólny stan (budżety, sesje, zgody HITL) w Redisie;
+#                                              wymaga obrazu z extra `redis`
 x-app: &app
-  build: {context: ., dockerfile: docker/Dockerfile}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    args: {EXTRAS: "${AICL_EXTRAS:-test}"}
   image: aicl:dev
 
 services:
@@ -31,9 +38,15 @@ services:
       AICL_TOOL_FETCH_URL: http://mock-tools:9002/tools/fetch_url
       AICL_TOOL_MAIL_URL: http://mock-tools:9002/tools/send_email
       AICL_TOOL_SHELL_URL: http://mock-tools:9002/tools/run_shell
+      AICL_STATE_URL: ${AICL_STATE_URL_OVERRIDE:-}   # empty = state in the process
       WATCHFILES_FORCE_POLLING: "true"      # hot reload przez bind mount (macOS/Windows, §2)
-    volumes: ["./policies:/app/policies", "./feeds:/app/feeds", "./data:/app/data"]
+    volumes:
+      - ./policies:/app/policies
+      - ./feeds:/app/feeds
+      - ./data:/app/data
+      - hf-cache:/root/.cache/huggingface  # ProtectAI model downloaded once, kept between runs
     ports: ["8080:8080"]
+    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"], interval: 5s, retries: 20}
     depends_on:
       mock-llm: {condition: service_healthy}
       mock-tools: {condition: service_healthy}
@@ -57,5 +70,11 @@ services:
     ports: ["11434:11434"]
     volumes: ["ollama:/root/.ollama"]
 
+  redis:
+    image: redis:7-alpine
+    profiles: [redis]
+    ports: ["6379:6379"]
+
 volumes:
   ollama: {}
+  hf-cache: {}

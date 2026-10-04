@@ -72,6 +72,7 @@ tools:
     privilege: high
     output_trust: trusted
     arg_schema: {type: object, required: [to, subject, body]}
+    no_redact_args: [to]                # the recipient is the action: scanned, never redacted
   run_shell:
     backend_url_env: AICL_TOOL_SHELL_URL
     privilege: critical

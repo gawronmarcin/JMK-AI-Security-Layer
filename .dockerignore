@@ -12,3 +12,5 @@ venv
 data/*
 reports/*
 !reports/.gitkeep
+# local experiments stay out of the image
+policies/local.yaml

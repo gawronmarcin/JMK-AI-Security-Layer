@@ -29,6 +29,7 @@ from aicl.flows.common import (
     account_usage,
     apply_redacted_args,
     extract_tool_arg_segments,
+    keep_args,
     stop_if_blocked,
 )
 from aicl.models import Action, ErrorType, Origin, Profile, RequestContext, Segment, Stage, Trust, Usage
@@ -241,6 +242,8 @@ async def _run(
             stop_if_blocked(out_arg_res, rec)
             if out_arg_res.action == Action.redact:
                 args = apply_redacted_args(args, out_arg_res.segments)
+                spec = policy.raw.tools.get(tool)
+                args = keep_args(args, proposed_args, spec.no_redact_args if spec else [])
                 _update_choice_tool_call_args(choices[choice_idx], tool, args)
 
         call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool": tool, "tool_args": args})

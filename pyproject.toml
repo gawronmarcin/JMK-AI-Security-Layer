@@ -34,6 +34,10 @@ protectai = [
     "huggingface_hub>=0.20",
     "numpy>=1.24",
 ]
+# shared state (budgets, sessions, HITL approvals) for several gateway instances: AICL_STATE_URL
+redis = [
+    "redis>=5",
+]
 bastion = [
     "bastion-prompt-protection",
 ]

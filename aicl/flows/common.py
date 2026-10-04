@@ -452,6 +452,13 @@ def extract_tool_arg_segments(
     return segments
 
 
+def keep_args(redacted: Any, original: Any, names: list[str]) -> Any:
+    """Put back the original value of top-level arguments listed in the tool's `no_redact_args`."""
+    if not names or not isinstance(redacted, dict) or not isinstance(original, dict):
+        return redacted
+    return {**redacted, **{k: original[k] for k in names if k in original}}
+
+
 def apply_redacted_args(tool_args: Any, segments: list[Segment]) -> Any:
     """Apply redacted text back into tool_args structure based on meta['arg_path']."""
     import copy

@@ -11,8 +11,8 @@ import logging
 from typing import Any
 
 from aicl.audit import iter_events
-from aicl.models import Action, AuditEvent, strongest_action
-from aicl.policy.schema import CompiledPolicy
+from aicl.models import Action, AuditDecision, AuditEvent, strongest_action
+from aicl.policy.schema import CompiledPolicy, ControlLevelConfig
 from aicl.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -85,6 +85,35 @@ def preview_policy_change(
     }
 
 
+TAINT_CONTROL_ID = "C-TAINT"
+
+
+def _replay_taint(d: AuditDecision, cfg: ControlLevelConfig, candidate: CompiledPolicy,
+                  actions: list[Action], reasons: list[str]) -> None:
+    """C-TAINT takes its action from the top-level `taint` block (aicl/controls/taint.py), not the
+    level. Only calls it stopped are replayed: an allowed call was not privileged or not tainted,
+    and the audit event does not carry enough to re-decide that."""
+    if d.action not in (Action.block, Action.require_approval):
+        return
+    spec = candidate.raw.taint
+    if spec is not None and not spec.enabled:
+        reasons.append("taint tracking is disabled in candidate policy")
+        return
+    level_action = cfg.get("action")
+    if level_action in (Action.require_approval, "require_approval"):
+        action = Action.require_approval
+    elif spec is not None and spec.action:
+        action = Action(spec.action)
+    else:
+        action = Action(level_action)
+    if cfg.mode == "shadow":
+        reasons.append(f"{TAINT_CONTROL_ID} switched to shadow mode in candidate policy (action {d.action.value} suppressed)")
+        return
+    actions.append(action)
+    if action != d.action:
+        reasons.append(f"{TAINT_CONTROL_ID} action changed from {d.action.value} to {action.value}")
+
+
 def _evaluate_candidate(
     req: AuditEvent, candidate: CompiledPolicy
 ) -> tuple[Action, list[str]]:
@@ -110,7 +139,12 @@ def _evaluate_candidate(
     for d in req.decisions:
         cfg = candidate.level_config(d.control_id, profile)
         if cfg is None:
-            reasons.append(f"control {d.control_id} is disabled in candidate policy")
+            if d.action != Action.allow:
+                reasons.append(f"control {d.control_id} is disabled in candidate policy")
+            continue
+
+        if d.control_id == TAINT_CONTROL_ID:
+            _replay_taint(d, cfg, candidate, candidate_actions, reasons)
             continue
 
         if cfg.mode == "shadow":
@@ -133,13 +167,6 @@ def _evaluate_candidate(
                 reasons.append(
                     f"{d.control_id} action changed from {d.action.value} to {configured_action.value}"
                 )
-
-    # 4. Check taint spec if tool call was in tainted session
-    if req.endpoint == "tool_invoke" and any(d.control_id == "C-TAINT" for d in req.decisions):
-        taint_spec = candidate.raw.taint
-        if taint_spec and taint_spec.enabled:
-            taint_action = Action(taint_spec.action)
-            candidate_actions.append(taint_action)
 
     final = strongest_action(candidate_actions) if candidate_actions else Action.allow
     return final, list(dict.fromkeys(reasons))

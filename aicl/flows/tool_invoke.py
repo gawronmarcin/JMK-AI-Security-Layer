@@ -29,6 +29,7 @@ from aicl.flows.common import (
     apply_redacted_args,
     auth_decision,
     extract_tool_arg_segments,
+    keep_args,
     stop_if_blocked,
 )
 from aicl.models import Action, ErrorType, Origin, RequestContext, Stage, Trust, Usage
@@ -123,6 +124,8 @@ async def _run(
         stop_if_blocked(input_result, rec)
         if input_result.action == Action.redact:
             args = apply_redacted_args(args, input_result.segments)
+            spec = policy.raw.tools.get(req.tool)
+            args = keep_args(args, requested_args, spec.no_redact_args if spec else [])
 
     # 3. Tool call stage (C-TOOL-ACL, C-LOOP, C-TAINT, C-CANARY, C-CODE-EXEC, C-MEM-ACL)
     call_ctx = ctx.model_copy(update={"stage": Stage.tool_call, "segments": arg_segments, "tool_args": args})

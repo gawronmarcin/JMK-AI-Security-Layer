@@ -74,6 +74,9 @@ class ToolSpec(_Strict):
     privilege: Privilege = "low"
     output_trust: Trust = "untrusted"
     arg_schema: dict[str, Any] | None = None
+    # Arguments that ARE the action (e.g. send_email `to`): still scanned (blocks, flags and the
+    # audit apply) but never redacted, or the call would go to "[REDACTED:email]".
+    no_redact_args: list[str] = Field(default_factory=list)
 
 
 class BudgetSpec(_Strict):
