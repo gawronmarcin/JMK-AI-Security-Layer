@@ -46,7 +46,7 @@ services:
     volumes:
       - ./policies:/app/policies
       - ./feeds:/app/feeds
-      - ./data:/app/data
+      - aicl-data:/app/data   # named volume: writable by the non-root user (a host bind mount is not)
       - hf-cache:/home/aicl/.cache/huggingface  # ProtectAI model downloaded once, kept between runs
     ports: ["127.0.0.1:8080:8080"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"], interval: 5s, retries: 20}
@@ -58,6 +58,7 @@ services:
     <<: *app
     profiles: [tests]
     command: pytest -q
+    user: "0:0"   # one-shot test runner: writes reports/ to the host bind mount (the image user cannot)
     environment: {AICL_TEST_REQUIRE_GATEWAY: "1"}
     volumes: ["./reports:/app/reports"]
 
@@ -105,7 +106,7 @@ services:
     volumes:
       - ./policies:/app/policies
       - ./feeds:/app/feeds
-      - ./data:/app/data
+      - aicl-data:/app/data   # named volume: writable by the non-root user (a host bind mount is not)
       - hf-cache:/home/aicl/.cache/huggingface  # ProtectAI model downloaded once, kept between runs
     ports: ["127.0.0.1:8081:8080"]
     healthcheck: {test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"], interval: 5s, retries: 60}
@@ -122,3 +123,4 @@ services:
 volumes:
   ollama: {}
   hf-cache: {}
+  aicl-data: {}   # audit log; export: GET /admin/export/audit.jsonl

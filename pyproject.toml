@@ -23,6 +23,7 @@ test = [
     "pytest-asyncio>=0.23",
     "asgi-lifespan>=2.1",
     "pytest-xdist>=3.5",
+    "numpy>=1.24",        # classifier softmax / embedding leave-group-out tests (no model needed)
 ]
 # C-INJ-BASTION in-process backends (docs/SEMANTIC_SETUP.md):
 # - protectai: ProtectAI/deberta-v3-base-prompt-injection-v2 (Apache-2.0, recommended), ONNX export
